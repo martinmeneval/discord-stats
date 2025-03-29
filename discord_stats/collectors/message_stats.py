@@ -24,6 +24,7 @@ class MessageStatisticsData:
         self.pictures_per_author: Counter[str] = Counter()
         self.total_pictures = 0
         self.days_in_period = 0
+        self.bot_id = None  # Store the bot's user ID
 
     @property
     def avg_messages_per_day(self) -> float:
