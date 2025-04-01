@@ -49,16 +49,29 @@ class MessageStatisticsData:
 
     def get_top_channels(self, limit: int = 3) -> list[tuple[str, int, float]]:
         """
-        Get the top active channels.
+        Get the top active channels (excluding threads).
 
         Returns a list of tuples containing (channel_name, message_count, percentage)
         """
         if not self.total_messages:
             return []
 
+        # Filter out thread channels (they start with #)
+        non_thread_channels = {
+            channel: count
+            for channel, count in self.messages_per_channel.items()
+            if channel.startswith("#") and channel not in self.messages_per_thread
+        }
+
+        # Get the most common non-thread channels
+        top_channels = sorted(
+            non_thread_channels.items(), key=lambda x: x[1], reverse=True
+        )[:limit]
+
+        # Calculate percentages
         return [
             (channel, count, (count / self.total_messages) * 100)
-            for channel, count in self.messages_per_channel.most_common(limit)
+            for channel, count in top_channels
         ]
 
     def get_top_picture_posters(self, limit: int = 1) -> list[tuple[str, int, float]]:
@@ -79,13 +92,17 @@ class MessageStatisticsData:
         """
         Get the top active threads.
 
-        Returns a list of tuples containing (thread_name, message_count, percentage_of_thread_messages)
+        Returns a list of tuples containing (thread_name, message_count, percentage_of_all_messages)
         """
-        if not self.total_thread_messages:
+        if not self.total_thread_messages or not self.total_messages:
             return []
 
         return [
-            (thread, count, (count / self.total_thread_messages) * 100)
+            (
+                thread,
+                count,
+                (count / self.total_messages) * 100,
+            )  # Percentage of all messages
             for thread, count in self.messages_per_thread.most_common(limit)
         ]
 
