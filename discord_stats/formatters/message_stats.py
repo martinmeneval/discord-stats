@@ -100,6 +100,21 @@ class MessageStatisticsFormatter(BaseFormatter[MessageStatisticsData]):
                     inline=False,
                 )
 
+        # Add top reactions stats
+        top_reactions = data.get_top_reactions(5)
+        if top_reactions and data.total_reactions > 0:
+            reactions_text = "\n".join(
+                f"**{i+1}. {emoji}**: {count:,} times ({percent:.1f}%)"
+                for i, (emoji, count, percent) in enumerate(top_reactions)
+            )
+            reactions_text += f"\nTotal reactions: {data.total_reactions:,}"
+
+            embed.add_field(
+                name="Top Reactions",
+                value=reactions_text,
+                inline=False,
+            )
+
         # Add footer
         embed.set_footer(text="Discord Stats Bot")
 
@@ -127,6 +142,7 @@ def format_statistics_text(data, start_date: datetime, end_date: datetime) -> st
         f"**Total Messages:** {data.total_messages:,}",
         f"**Daily Average:** {data.avg_messages_per_day:.1f} messages/day",
         f"**Total Pictures:** {data.total_pictures:,}",
+        f"**Total Reactions:** {data.total_reactions:,}",
         "",
     ]
 
@@ -141,6 +157,9 @@ def format_statistics_text(data, start_date: datetime, end_date: datetime) -> st
 
     # Add top picture poster
     _add_top_picture_posters_section(output, data)
+
+    # Add top reactions
+    _add_top_reactions_section(output, data)
 
     # Add bot mention without the GitHub link
     if hasattr(data, "bot_id") and data.bot_id is not None:
@@ -209,3 +228,14 @@ def _add_top_picture_posters_section(output: list, data) -> None:
             output.append(
                 f"{mention}: {count:,} pictures ({percent:.1f}% of all pictures)"
             )
+        output.append("")
+
+
+def _add_top_reactions_section(output: list, data) -> None:
+    """Add the top reactions section to the output list."""
+    top_reactions = data.get_top_reactions(5)
+    if top_reactions and data.total_reactions > 0:
+        output.append("**Top Reactions:**")
+        for i, (emoji, count, percent) in enumerate(top_reactions):
+            output.append(f"{i+1}. {emoji}: {count:,} times ({percent:.1f}%)")
+        output.append("")

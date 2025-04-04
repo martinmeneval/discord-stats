@@ -25,6 +25,8 @@ class MessageStatisticsData:
         self.total_pictures = 0
         self.days_in_period = 0
         self.bot_id = None  # Store the bot's user ID
+        self.reactions_count: Counter[str] = Counter()  # Count of each reaction emoji
+        self.total_reactions = 0  # Total number of reactions
 
     @property
     def avg_messages_per_day(self) -> float:
@@ -104,6 +106,20 @@ class MessageStatisticsData:
                 (count / self.total_messages) * 100,
             )  # Percentage of all messages
             for thread, count in self.messages_per_thread.most_common(limit)
+        ]
+
+    def get_top_reactions(self, limit: int = 3) -> list[tuple[str, int, float]]:
+        """
+        Get the top reactions.
+
+        Returns a list of tuples containing (emoji, reaction_count, percentage)
+        """
+        if not self.total_reactions:
+            return []
+
+        return [
+            (emoji, count, (count / self.total_reactions) * 100)
+            for emoji, count in self.reactions_count.most_common(limit)
         ]
 
 
@@ -249,6 +265,9 @@ class MessageStatisticsCollector(BaseCollector[MessageStatisticsData]):
         # Check for image attachments
         self._process_attachments(message, author_name, stats)
 
+        # Process reactions
+        self._process_reactions(message, stats)
+
     def _process_attachments(
         self, message: discord.Message, author_name: str, stats: MessageStatisticsData
     ) -> None:
@@ -268,3 +287,23 @@ class MessageStatisticsCollector(BaseCollector[MessageStatisticsData]):
         except Exception as e:
             # Log but continue with other messages
             logging.debug(f"Error processing attachments: {e}")
+
+    def _process_reactions(
+        self, message: discord.Message, stats: MessageStatisticsData
+    ) -> None:
+        """Process reactions on a message and update reaction statistics."""
+        try:
+            # Process each reaction on the message
+            for reaction in message.reactions:
+                # Get the emoji name or unicode character
+                emoji = str(reaction.emoji)
+                # Count each reaction (counts all users who reacted)
+                count = reaction.count
+
+                # Update reaction counters
+                stats.reactions_count[emoji] += count
+                stats.total_reactions += count
+
+        except Exception as e:
+            # Log but continue with other messages
+            logging.debug(f"Error processing reactions: {e}")
