@@ -1,10 +1,11 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Counter
 
 import discord
-from discord.channel import TextChannel, Thread
+from discord.channel import TextChannel
 from discord.guild import Guild
+from discord.threads import Thread
 
 from . import BaseCollector
 
@@ -27,6 +28,17 @@ class MessageStatisticsData:
         self.bot_id = None  # Store the bot's user ID
         self.reactions_count: Counter[str] = Counter()  # Count of each reaction emoji
         self.total_reactions = 0  # Total number of reactions
+
+        # Time-series data for graphs
+        self.messages_per_day: dict[str, int] = {}  # ISO date string -> message count
+        self.messages_per_day_per_channel: dict[str, dict[str, int]] = (
+            {}
+        )  # channel -> {date -> count}
+        self.reactions_per_day: dict[str, dict[str, int]] = (
+            {}
+        )  # emoji -> {date -> count}
+        self.start_date: datetime | None = None
+        self.end_date: datetime | None = None
 
     @property
     def avg_messages_per_day(self) -> float:
@@ -122,6 +134,67 @@ class MessageStatisticsData:
             for emoji, count in self.reactions_count.most_common(limit)
         ]
 
+    def get_all_dates_in_range(self) -> list[str]:
+        """
+        Get all dates in the statistics period as ISO date strings.
+
+        Returns:
+            List of ISO date strings (YYYY-MM-DD) for every day in the range
+        """
+        if not self.start_date or not self.end_date:
+            return []
+
+        dates = []
+        current_date = self.start_date.date()
+        end_date = self.end_date.date()
+
+        while current_date <= end_date:
+            dates.append(current_date.isoformat())
+            current_date += timedelta(days=1)
+
+        return dates
+
+    def get_top_channels_with_daily_data(
+        self, limit: int = 5
+    ) -> list[tuple[str, int, dict[str, int]]]:
+        """
+        Get top channels with their daily message counts.
+
+        Returns:
+            List of tuples containing (channel_name, total_count, daily_data)
+            where daily_data is {date -> count}
+        """
+        top_channels = self.get_top_channels(limit)
+        result = []
+
+        for channel_name, total_count, _ in top_channels:
+            daily_data = self.messages_per_day_per_channel.get(channel_name, {})
+            result.append((channel_name, total_count, daily_data))
+
+        return result
+
+    def get_top_reactions_with_daily_data(
+        self, limit: int = 5
+    ) -> list[tuple[str, int, dict[str, int]]]:
+        """
+        Get top reactions with their daily usage counts.
+
+        Returns:
+            List of tuples containing (emoji, total_count, daily_data)
+            where daily_data is {date -> count}
+        """
+        top_reactions = self.get_top_reactions(limit)
+        if not top_reactions:
+            return []
+
+        result = []
+        for emoji, total_count, _ in top_reactions:
+            # Get daily data for this reaction
+            daily_data = self.reactions_per_day.get(emoji, {})
+            result.append((emoji, total_count, daily_data))
+
+        return result
+
 
 class MessageStatisticsCollector(BaseCollector[MessageStatisticsData]):
     """
@@ -153,6 +226,8 @@ class MessageStatisticsCollector(BaseCollector[MessageStatisticsData]):
         stats.days_in_period = (
             end_date - start_date
         ).days or 1  # Ensure at least 1 day
+        stats.start_date = start_date
+        stats.end_date = end_date
 
         # Log information about the guild
         logging.info(f"Collecting statistics for guild: {guild.name} (ID: {guild.id})")
@@ -249,12 +324,27 @@ class MessageStatisticsCollector(BaseCollector[MessageStatisticsData]):
         )
         author_id = str(message.author.id)
 
+        # Get message date as ISO string for time series
+        message_date = message.created_at.date().isoformat()
+
         # Update message counters
         stats.total_messages += 1
         stats.messages_per_author[author_name] += 1
         stats.messages_per_author_id[author_name] = author_id
         stats.messages_per_channel[channel_name] += 1
         stats.messages_per_channel_id[channel_name] = message.channel.id
+
+        # Update time-series data
+        stats.messages_per_day[message_date] = (
+            stats.messages_per_day.get(message_date, 0) + 1
+        )
+
+        # Update per-channel daily data
+        if channel_name not in stats.messages_per_day_per_channel:
+            stats.messages_per_day_per_channel[channel_name] = {}
+        stats.messages_per_day_per_channel[channel_name][message_date] = (
+            stats.messages_per_day_per_channel[channel_name].get(message_date, 0) + 1
+        )
 
         # Track thread messages separately
         if is_thread:
@@ -266,7 +356,7 @@ class MessageStatisticsCollector(BaseCollector[MessageStatisticsData]):
         self._process_attachments(message, author_name, stats)
 
         # Process reactions
-        self._process_reactions(message, stats)
+        self._process_reactions(message, stats, message_date)
 
     def _process_attachments(
         self, message: discord.Message, author_name: str, stats: MessageStatisticsData
@@ -289,7 +379,7 @@ class MessageStatisticsCollector(BaseCollector[MessageStatisticsData]):
             logging.debug(f"Error processing attachments: {e}")
 
     def _process_reactions(
-        self, message: discord.Message, stats: MessageStatisticsData
+        self, message: discord.Message, stats: MessageStatisticsData, message_date: str
     ) -> None:
         """Process reactions on a message and update reaction statistics."""
         try:
@@ -303,6 +393,13 @@ class MessageStatisticsCollector(BaseCollector[MessageStatisticsData]):
                 # Update reaction counters
                 stats.reactions_count[emoji] += count
                 stats.total_reactions += count
+
+                # Update time-series data for reactions
+                if emoji not in stats.reactions_per_day:
+                    stats.reactions_per_day[emoji] = {}
+                stats.reactions_per_day[emoji][message_date] = (
+                    stats.reactions_per_day[emoji].get(message_date, 0) + count
+                )
 
         except Exception as e:
             # Log but continue with other messages

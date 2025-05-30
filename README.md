@@ -13,6 +13,7 @@ servers.
   - Top members by message count
   - Most active channels and threads
   - Picture posting statistics
+  - Visual graphs of activity over time
 - Modular architecture for easy extension with new statistics types
 
 ## Requirements
@@ -76,7 +77,27 @@ To save the output to a file:
 poetry run discord-stats stats --config config.json --output stats.txt
 ```
 
+To generate graphs of server activity:
+
+```bash
+poetry run discord-stats graphs --config config.json --output-dir ./graphs
+```
+
+To generate graphs with smoothing disabled:
+
+```bash
+poetry run discord-stats graphs --config config.json --output-dir ./graphs --no-smooth
+```
+
+To generate both text stats and graphs:
+
+```bash
+poetry run discord-stats stats --config config.json --generate-graphs --graphs-dir ./graphs
+```
+
 ### Command Line Options
+
+#### Stats Command
 
 ```bash
 Usage: discord-stats stats [OPTIONS]
@@ -90,9 +111,43 @@ Options:
   --start-date TEXT              Start date (YYYY-MM-DD)
   --end-date TEXT                End date (YYYY-MM-DD)
   --output PATH                  Output file path (optional)
+  --generate-graphs              Generate graphs alongside text output
+  --graphs-dir PATH              Directory for graph output (default: same as text output)
+  --smooth / --no-smooth         Apply smoothing to line graphs when generating graphs (default: on)
   --debug / --no-debug           Enable debug logging
   --help                         Show this message and exit
 ```
+
+#### Graphs Command
+
+```bash
+Usage: discord-stats graphs [OPTIONS]
+
+  Generate graphs from Discord server statistics.
+
+Options:
+  --config PATH                  Path to the configuration file
+  --token TEXT                   Discord bot token
+  --guild-id INTEGER             Discord guild/server ID
+  --start-date TEXT              Start date (YYYY-MM-DD)
+  --end-date TEXT                End date (YYYY-MM-DD)
+  --output-dir PATH              Output directory for graphs (default: '.')
+  --prefix TEXT                  Prefix for graph filenames (default: 'discord_stats')
+  --smooth / --no-smooth         Apply smoothing to line graphs (default: on)
+  --debug / --no-debug           Enable debug logging
+  --help                         Show this message and exit
+```
+
+## Graph Types
+
+The tool generates several types of graphs to visualize Discord server activity:
+
+1. **Messages Per Day**: Line graph showing daily message activity with optional smoothing
+2. **Top Channels Over Time**: Multi-line graph showing cumulative message activity for the most active channels
+3. **Top Reactions Over Time**: Multi-line graph showing cumulative usage for the most popular reaction emojis
+4. **Daily Activity Heatmap**: Heatmap showing which days of the week are most active
+
+The top channels and reactions graphs show cumulative data (running totals) rather than daily counts, making growth trends much clearer and easier to interpret. All line graphs support smoothing to make trends easier to read. Smoothing can be disabled with the `--no-smooth` option.
 
 ## Running as a Discord Bot
 
@@ -110,8 +165,17 @@ config = load_config("config.json")
 run(config)
 ```
 
-When running as a bot, use the `!stats` command in your Discord server to fetch
-statistics.
+When running as a bot, use the following commands in your Discord server:
+
+- `!stats` - Fetch and display server statistics
+- `!graphs` - Generate and upload visual graphs of server activity
+- `!graphs smooth=off` - Generate graphs with smoothing disabled
+- `!help_stats` - Show help information for available commands
+
+Bot commands support date ranges and smoothing options:
+
+- `!graphs 2025-01-01 2025-01-31` - Generate graphs for January 2025
+- `!graphs 2025-01-01 2025-01-31 smooth=off` - Generate non-smoothed graphs for January 2025
 
 ## Project Structure
 
