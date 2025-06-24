@@ -28,15 +28,21 @@ class MessageStatisticsData:
         self.bot_id = None  # Store the bot's user ID
         self.reactions_count: Counter[str] = Counter()  # Count of each reaction emoji
         self.total_reactions = 0  # Total number of reactions
+        self.messages_per_author_per_channel: dict[
+            str, Counter[str]
+        ] = {}  # author -> {channel -> count}
 
         # Time-series data for graphs
         self.messages_per_day: dict[str, int] = {}  # ISO date string -> message count
-        self.messages_per_day_per_channel: dict[str, dict[str, int]] = (
-            {}
-        )  # channel -> {date -> count}
-        self.reactions_per_day: dict[str, dict[str, int]] = (
-            {}
-        )  # emoji -> {date -> count}
+        self.messages_per_day_per_channel: dict[
+            str, dict[str, int]
+        ] = {}  # channel -> {date -> count}
+        self.messages_per_day_per_author: dict[
+            str, dict[str, int]
+        ] = {}  # author -> {date -> count}
+        self.reactions_per_day: dict[
+            str, dict[str, int]
+        ] = {}  # emoji -> {date -> count}
         self.start_date: datetime | None = None
         self.end_date: datetime | None = None
 
@@ -195,6 +201,60 @@ class MessageStatisticsData:
 
         return result
 
+    def get_top_authors_channel_distribution(
+        self, limit: int = 5
+    ) -> list[tuple[str, int, dict[str, tuple[int, float]]]]:
+        """
+        Get the channel distribution for top message authors.
+
+        Args:
+            limit: Maximum number of authors to return
+
+        Returns:
+            List of tuples containing (author_name, total_count, channel_data)
+            where channel_data is {channel_name -> (message_count, percentage)}
+        """
+        top_authors = self.get_top_posters(limit)
+        result = []
+
+        for author_name, total_count, _ in top_authors:
+            # Get channel distribution
+            channel_counts = self.messages_per_author_per_channel.get(
+                author_name, Counter()
+            )
+
+            # Calculate percentages for all channels
+            channel_data = {}
+            for channel, count in channel_counts.items():
+                percentage = (count / total_count) * 100
+                channel_data[channel] = (count, percentage)
+
+            result.append((author_name, total_count, channel_data))
+
+        return result
+
+    def get_top_authors_with_daily_data(
+        self, limit: int = 5
+    ) -> list[tuple[str, int, dict[str, int]]]:
+        """
+        Get top message authors with their daily message counts.
+
+        Args:
+            limit: Maximum number of authors to return
+
+        Returns:
+            List of tuples containing (author_name, total_count, daily_data)
+            where daily_data is {date -> count}
+        """
+        top_authors = self.get_top_posters(limit)
+        result = []
+
+        for author_name, total_count, _ in top_authors:
+            daily_data = self.messages_per_day_per_author.get(author_name, {})
+            result.append((author_name, total_count, daily_data))
+
+        return result
+
 
 class MessageStatisticsCollector(BaseCollector[MessageStatisticsData]):
     """
@@ -334,6 +394,11 @@ class MessageStatisticsCollector(BaseCollector[MessageStatisticsData]):
         stats.messages_per_channel[channel_name] += 1
         stats.messages_per_channel_id[channel_name] = message.channel.id
 
+        # Update per-author per-channel message count
+        if author_name not in stats.messages_per_author_per_channel:
+            stats.messages_per_author_per_channel[author_name] = Counter()
+        stats.messages_per_author_per_channel[author_name][channel_name] += 1
+
         # Update time-series data
         stats.messages_per_day[message_date] = (
             stats.messages_per_day.get(message_date, 0) + 1
@@ -344,6 +409,13 @@ class MessageStatisticsCollector(BaseCollector[MessageStatisticsData]):
             stats.messages_per_day_per_channel[channel_name] = {}
         stats.messages_per_day_per_channel[channel_name][message_date] = (
             stats.messages_per_day_per_channel[channel_name].get(message_date, 0) + 1
+        )
+
+        # Update per-author daily data
+        if author_name not in stats.messages_per_day_per_author:
+            stats.messages_per_day_per_author[author_name] = {}
+        stats.messages_per_day_per_author[author_name][message_date] = (
+            stats.messages_per_day_per_author[author_name].get(message_date, 0) + 1
         )
 
         # Track thread messages separately

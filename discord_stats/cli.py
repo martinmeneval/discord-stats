@@ -64,7 +64,11 @@ def cli():
     type=click.Path(),
     help="Directory for graph output (default: same as text output)",
 )
-@click.option("--smooth/--no-smooth", default=True, help="Apply smoothing to line graphs when generating graphs (default: on)")
+@click.option(
+    "--smooth/--no-smooth",
+    default=True,
+    help="Apply smoothing to line graphs when generating graphs (default: on)",
+)
 @click.option("--debug/--no-debug", default=False, help="Enable debug logging")
 def stats(
     config,
@@ -186,9 +190,15 @@ def stats(
     "--output-dir", type=click.Path(), default=".", help="Output directory for graphs"
 )
 @click.option("--prefix", default="discord_stats", help="Prefix for graph filenames")
-@click.option("--smooth/--no-smooth", default=True, help="Apply smoothing to line graphs (default: on)")
+@click.option(
+    "--smooth/--no-smooth",
+    default=True,
+    help="Apply smoothing to line graphs (default: on)",
+)
 @click.option("--debug/--no-debug", default=False, help="Enable debug logging")
-def graphs(config, token, guild_id, start_date, end_date, output_dir, prefix, smooth, debug):
+def graphs(
+    config, token, guild_id, start_date, end_date, output_dir, prefix, smooth, debug
+):
     """Generate graphs from Discord server statistics."""
     # Setup logging
     log_level = logging.DEBUG if debug else logging.INFO
