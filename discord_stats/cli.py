@@ -5,6 +5,7 @@ import json
 import logging
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import click
 from dateutil import parser as date_parser
@@ -12,6 +13,7 @@ from dateutil import parser as date_parser
 from .config import load_config
 from .discord_client import fetch_statistics
 from .formatters.message_stats import format_statistics_text
+from .graphs.message_graphs import MessageGraphGenerator
 
 
 def setup_logging(level=logging.INFO):
@@ -54,8 +56,28 @@ def cli():
 @click.option("--start-date", help="Start date (YYYY-MM-DD)")
 @click.option("--end-date", help="End date (YYYY-MM-DD)")
 @click.option("--output", type=click.Path(), help="Output file path (optional)")
+@click.option(
+    "--generate-graphs", is_flag=True, help="Generate graphs alongside text output"
+)
+@click.option(
+    "--graphs-dir",
+    type=click.Path(),
+    help="Directory for graph output (default: same as text output)",
+)
+@click.option("--smooth/--no-smooth", default=True, help="Apply smoothing to line graphs when generating graphs (default: on)")
 @click.option("--debug/--no-debug", default=False, help="Enable debug logging")
-def stats(config, token, guild_id, start_date, end_date, output, debug):
+def stats(
+    config,
+    token,
+    guild_id,
+    start_date,
+    end_date,
+    output,
+    generate_graphs,
+    graphs_dir,
+    smooth,
+    debug,
+):
     """Fetch statistics from a Discord server and output them as plain text."""
     # Setup logging
     log_level = logging.DEBUG if debug else logging.INFO
@@ -123,8 +145,122 @@ def stats(config, token, guild_id, start_date, end_date, output, debug):
         else:
             click.echo(formatted_stats)
 
+        # Generate graphs if requested
+        if generate_graphs:
+            # Determine output directory for graphs
+            if graphs_dir:
+                graph_output_dir = graphs_dir
+            elif output:
+                # Use same directory as text output
+                graph_output_dir = str(Path(output).parent)
+            else:
+                graph_output_dir = "."
+
+            # Generate graphs
+            graph_generator = MessageGraphGenerator()
+            generated_files = graph_generator.generate_all_graphs(
+                stats_data, graph_output_dir, "discord_stats", smooth=smooth
+            )
+
+            if generated_files:
+                click.echo(f"\nGenerated {len(generated_files)} graphs:")
+                for file_path in generated_files:
+                    click.echo(f"  - {file_path}")
+            else:
+                click.echo("\nNo graphs were generated. Check the logs for errors.")
+
     except Exception as e:
         logging.exception("Error fetching statistics")
+        sys.exit(1)
+
+
+@cli.command()
+@click.option(
+    "--config", type=click.Path(exists=True), help="Path to the configuration file"
+)
+@click.option("--token", help="Discord bot token")
+@click.option("--guild-id", type=int, help="Discord guild/server ID")
+@click.option("--start-date", help="Start date (YYYY-MM-DD)")
+@click.option("--end-date", help="End date (YYYY-MM-DD)")
+@click.option(
+    "--output-dir", type=click.Path(), default=".", help="Output directory for graphs"
+)
+@click.option("--prefix", default="discord_stats", help="Prefix for graph filenames")
+@click.option("--smooth/--no-smooth", default=True, help="Apply smoothing to line graphs (default: on)")
+@click.option("--debug/--no-debug", default=False, help="Enable debug logging")
+def graphs(config, token, guild_id, start_date, end_date, output_dir, prefix, smooth, debug):
+    """Generate graphs from Discord server statistics."""
+    # Setup logging
+    log_level = logging.DEBUG if debug else logging.INFO
+    setup_logging(log_level)
+
+    # Load configuration
+    config_data = None
+    if config:
+        try:
+            config_data = load_config(config)
+            token = token or config_data.bot.token
+            guild_id = guild_id or getattr(config_data.bot, "guild_id", None)
+        except FileNotFoundError as e:
+            logging.error(f"Error: {e}")
+            sys.exit(1)
+
+    # Validate required parameters
+    if not token:
+        logging.error("Discord bot token is required (--token or config file)")
+        sys.exit(1)
+
+    if not guild_id:
+        logging.error("Discord guild ID is required (--guild-id or config file)")
+        sys.exit(1)
+
+    # Parse dates
+    now = datetime.now()
+    default_start = now - timedelta(weeks=4)
+
+    # Get dates from config if available
+    config_start = None
+    config_end = None
+    if config_data and hasattr(config_data.bot, "stats_config"):
+        config_start = getattr(config_data.bot.stats_config, "start_date", None)
+        config_end = getattr(config_data.bot.stats_config, "end_date", None)
+
+    # Parse dates with fallbacks
+    start = parse_date(start_date, default_start, config_start, "start date")
+    end = parse_date(end_date, now, config_end, "end date")
+
+    # Validate date range
+    if end < start:
+        logging.error("End date must be after start date.")
+        sys.exit(1)
+
+    # Fetch statistics
+    logging.info(
+        f"Fetching statistics for guild {guild_id} from {start.date()} to {end.date()}"
+    )
+
+    try:
+        stats_data = asyncio.run(fetch_statistics(token, guild_id, start, end))
+
+        if not stats_data:
+            logging.error("Failed to fetch statistics data")
+            sys.exit(1)
+
+        # Generate graphs
+        graph_generator = MessageGraphGenerator()
+        generated_files = graph_generator.generate_all_graphs(
+            stats_data, output_dir, prefix, smooth=smooth
+        )
+
+        if generated_files:
+            click.echo(f"Generated {len(generated_files)} graphs:")
+            for file_path in generated_files:
+                click.echo(f"  - {file_path}")
+        else:
+            click.echo("No graphs were generated. Check the logs for errors.")
+
+    except Exception as e:
+        logging.exception("Error generating graphs")
         sys.exit(1)
 
 

@@ -8,6 +8,7 @@ from discord.ext import commands
 from ..collectors.message_stats import MessageStatisticsCollector
 from ..config import Config
 from ..formatters.message_stats import MessageStatisticsFormatter
+from ..graphs.message_graphs import MessageGraphGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +38,11 @@ class StatisticsBot(commands.Bot):
 
     async def on_ready(self):
         """Called when the bot is ready and connected."""
-        logger.info(f"Logged in as {self.user.name} ({self.user.id})")
-        logger.info(f"Connected to {len(self.guilds)} guilds")
+        if self.user:
+            logger.info(f"Logged in as {self.user.name} ({self.user.id})")
+            logger.info(f"Connected to {len(self.guilds)} guilds")
+        else:
+            logger.warning("Bot is ready but user is not set")
 
     def _setup_commands(self):
         """Set up the bot commands."""
@@ -103,6 +107,97 @@ class StatisticsBot(commands.Bot):
                         f"An error occurred while fetching statistics: {str(e)}"
                     )
 
+        @self.command(name="graphs")
+        async def graphs_command(
+            ctx,
+            start_date: str | None = None,
+            end_date: str | None = None,
+            smooth: str | None = None
+        ):
+            """
+            Generate and upload graphs of server statistics.
+
+            Usage:
+                !graphs - Shows graphs for the last 4 weeks
+                !graphs YYYY-MM-DD - Shows graphs from the specified date until now
+                !graphs YYYY-MM-DD YYYY-MM-DD - Shows graphs between the specified dates
+                !graphs YYYY-MM-DD YYYY-MM-DD smooth=off - Disable line smoothing
+            """
+            async with ctx.typing():
+                try:
+                    # Parse the date arguments
+                    stats_config = self.config.bot.stats_config
+
+                    if start_date is not None:
+                        try:
+                            parsed_start_date = date_parser.parse(start_date)
+                            stats_config.start_date = parsed_start_date
+                        except ValueError:
+                            await ctx.send(
+                                "Invalid start date format. Please use YYYY-MM-DD."
+                            )
+                            return
+
+                    if end_date is not None:
+                        try:
+                            parsed_end_date = date_parser.parse(end_date)
+                            stats_config.end_date = parsed_end_date
+                        except ValueError:
+                            await ctx.send(
+                                "Invalid end date format. Please use YYYY-MM-DD."
+                            )
+                            return
+
+                    # Validate date range
+                    if stats_config.end_date < stats_config.start_date:
+                        await ctx.send("End date must be after start date.")
+                        return
+
+                    # Parse smooth parameter
+                    use_smooth = True
+                    if smooth is not None and smooth.lower() in ['off', 'false', 'no', '0']:
+                        use_smooth = False
+
+                    # Collect statistics
+                    collector = MessageStatisticsCollector()
+                    graph_generator = MessageGraphGenerator()
+
+                    data = await collector.collect(
+                        ctx.guild, stats_config.start_date, stats_config.end_date
+                    )
+
+                    # Generate graphs in memory and upload them
+                    import os
+                    import tempfile
+
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        generated_files = graph_generator.generate_all_graphs(
+                            data, temp_dir, "server_stats", smooth=use_smooth
+                        )
+
+                        if generated_files:
+                            # Upload each graph
+                            for file_path in generated_files:
+                                if os.path.exists(file_path):
+                                    filename = os.path.basename(file_path)
+                                    await ctx.send(
+                                        file=discord.File(file_path, filename)
+                                    )
+
+                            await ctx.send(
+                                f"Generated and uploaded {len(generated_files)} graphs!"
+                            )
+                        else:
+                            await ctx.send(
+                                "No graphs could be generated from the current data."
+                            )
+
+                except Exception as e:
+                    logger.exception("Error generating graphs")
+                    await ctx.send(
+                        f"An error occurred while generating graphs: {str(e)}"
+                    )
+
         @self.command(name="help_stats")
         async def help_stats_command(ctx):
             """Show help information for the statistics commands."""
@@ -120,6 +215,19 @@ class StatisticsBot(commands.Bot):
                     "!stats - Shows stats for the last 4 weeks\n"
                     "!stats YYYY-MM-DD - From specified date until now\n"
                     "!stats YYYY-MM-DD YYYY-MM-DD - Between specified dates"
+                ),
+                inline=False,
+            )
+
+            embed.add_field(
+                name="!graphs",
+                value=(
+                    "Generate and upload graphs of server statistics for a time period.\n\n"
+                    "**Usage:**\n"
+                    "!graphs - Shows graphs for the last 4 weeks\n"
+                    "!graphs YYYY-MM-DD - From specified date until now\n"
+                    "!graphs YYYY-MM-DD YYYY-MM-DD - Between specified dates\n"
+                    "!graphs YYYY-MM-DD YYYY-MM-DD smooth=off - Disable line smoothing"
                 ),
                 inline=False,
             )
