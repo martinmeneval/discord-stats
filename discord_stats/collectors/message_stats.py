@@ -1,6 +1,6 @@
 import logging
+from collections import Counter
 from datetime import datetime, timedelta
-from typing import Counter
 
 import discord
 from discord.channel import TextChannel

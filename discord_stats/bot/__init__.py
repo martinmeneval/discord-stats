@@ -1,5 +1,8 @@
 import asyncio
 import logging
+import os
+import tempfile
+from datetime import datetime
 
 import discord
 from dateutil import parser as date_parser
@@ -11,6 +14,14 @@ from ..formatters.message_stats import MessageStatisticsFormatter
 from ..graphs.message_graphs import MessageGraphGenerator
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_date_arg(date_str: str) -> datetime | None:
+    """Parse a user-supplied date string, returning None on failure."""
+    try:
+        return date_parser.parse(date_str)
+    except ValueError:
+        return None
 
 
 class StatisticsBot(commands.Bot):
@@ -61,31 +72,31 @@ class StatisticsBot(commands.Bot):
             """
             async with ctx.typing():
                 try:
-                    # Parse the date arguments
+                    # Parse the date arguments into local variables (do not mutate shared config)
                     stats_config = self.config.bot.stats_config
+                    resolved_start = stats_config.start_date
+                    resolved_end = stats_config.end_date
 
                     if start_date is not None:
-                        try:
-                            parsed_start_date = date_parser.parse(start_date)
-                            stats_config.start_date = parsed_start_date
-                        except ValueError:
+                        parsed = _parse_date_arg(start_date)
+                        if parsed is None:
                             await ctx.send(
                                 "Invalid start date format. Please use YYYY-MM-DD."
                             )
                             return
+                        resolved_start = parsed
 
                     if end_date is not None:
-                        try:
-                            parsed_end_date = date_parser.parse(end_date)
-                            stats_config.end_date = parsed_end_date
-                        except ValueError:
+                        parsed = _parse_date_arg(end_date)
+                        if parsed is None:
                             await ctx.send(
                                 "Invalid end date format. Please use YYYY-MM-DD."
                             )
                             return
+                        resolved_end = parsed
 
                     # Validate date range
-                    if stats_config.end_date < stats_config.start_date:
+                    if resolved_end < resolved_start:
                         await ctx.send("End date must be after start date.")
                         return
 
@@ -94,7 +105,7 @@ class StatisticsBot(commands.Bot):
                     formatter = MessageStatisticsFormatter()
 
                     data = await collector.collect(
-                        ctx.guild, stats_config.start_date, stats_config.end_date
+                        ctx.guild, resolved_start, resolved_end
                     )
 
                     # Format and send statistics
@@ -125,31 +136,31 @@ class StatisticsBot(commands.Bot):
             """
             async with ctx.typing():
                 try:
-                    # Parse the date arguments
+                    # Parse the date arguments into local variables (do not mutate shared config)
                     stats_config = self.config.bot.stats_config
+                    resolved_start = stats_config.start_date
+                    resolved_end = stats_config.end_date
 
                     if start_date is not None:
-                        try:
-                            parsed_start_date = date_parser.parse(start_date)
-                            stats_config.start_date = parsed_start_date
-                        except ValueError:
+                        parsed = _parse_date_arg(start_date)
+                        if parsed is None:
                             await ctx.send(
                                 "Invalid start date format. Please use YYYY-MM-DD."
                             )
                             return
+                        resolved_start = parsed
 
                     if end_date is not None:
-                        try:
-                            parsed_end_date = date_parser.parse(end_date)
-                            stats_config.end_date = parsed_end_date
-                        except ValueError:
+                        parsed = _parse_date_arg(end_date)
+                        if parsed is None:
                             await ctx.send(
                                 "Invalid end date format. Please use YYYY-MM-DD."
                             )
                             return
+                        resolved_end = parsed
 
                     # Validate date range
-                    if stats_config.end_date < stats_config.start_date:
+                    if resolved_end < resolved_start:
                         await ctx.send("End date must be after start date.")
                         return
 
@@ -168,13 +179,10 @@ class StatisticsBot(commands.Bot):
                     graph_generator = MessageGraphGenerator()
 
                     data = await collector.collect(
-                        ctx.guild, stats_config.start_date, stats_config.end_date
+                        ctx.guild, resolved_start, resolved_end
                     )
 
                     # Generate graphs in memory and upload them
-                    import os
-                    import tempfile
-
                     with tempfile.TemporaryDirectory() as temp_dir:
                         generated_files = graph_generator.generate_all_graphs(
                             data, temp_dir, "server_stats", smooth=use_smooth

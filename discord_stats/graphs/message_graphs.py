@@ -7,6 +7,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Literal, Optional
 
+import unicodedata
+
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -411,8 +413,6 @@ class MessageGraphGenerator:
                 cumulative_counts.append(running_total)
 
             # Get Unicode name of emoji for display
-            import unicodedata
-
             # Try to get the official Unicode name, fallback to the emoji itself
             try:
                 # For combined emojis (like country flags), we use the first character
