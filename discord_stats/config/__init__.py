@@ -1,4 +1,4 @@
-from .loader import create_default_config, load_config
+from .loader import load_config
 from .models import BotConfig, Config, StatisticsConfig
 
 __all__ = [
@@ -6,5 +6,4 @@ __all__ = [
     "BotConfig",
     "StatisticsConfig",
     "load_config",
-    "create_default_config",
 ]

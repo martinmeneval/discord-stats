@@ -25,8 +25,7 @@ class BotConfig(BaseModel):
     """Configuration for the Discord bot."""
 
     token: str = Field(..., description="Discord bot token")
-    command_prefix: str = Field("!", description="Command prefix for the bot")
-    guild_id: int = Field(None, description="Discord guild/server ID")
+    guild_id: int | None = Field(None, description="Discord guild/server ID")
     stats_config: StatisticsConfig = Field(default_factory=StatisticsConfig)
 
 

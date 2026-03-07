@@ -40,6 +40,42 @@ def parse_date(date_str, default_date, config_date=None, date_name="date"):
     return default_date
 
 
+def _resolve_credentials(config_data, token, guild_id):
+    """Merge CLI flags with config file values, preferring explicit flags."""
+    if config_data:
+        token = token or config_data.bot.token
+        guild_id = guild_id or config_data.bot.guild_id
+    if not token:
+        logging.error("Discord bot token is required (--token or config file)")
+        sys.exit(1)
+    if not guild_id:
+        logging.error("Discord guild ID is required (--guild-id or config file)")
+        sys.exit(1)
+    return token, guild_id
+
+
+def _resolve_dates(start_date_str, end_date_str, config_data):
+    """Resolve start/end dates from CLI flags, config, or sensible defaults."""
+    now = datetime.now()
+    default_start = now - timedelta(weeks=4)
+
+    config_start = None
+    config_end = None
+    if config_data:
+        stats_cfg = config_data.bot.stats_config
+        config_start = stats_cfg.start_date
+        config_end = stats_cfg.end_date
+
+    start = parse_date(start_date_str, default_start, config_start, "start date")
+    end = parse_date(end_date_str, now, config_end, "end date")
+
+    if end < start:
+        logging.error("End date must be after start date.")
+        sys.exit(1)
+
+    return start, end
+
+
 @click.group()
 @click.version_option(version="0.1.0")
 def cli():
@@ -83,51 +119,20 @@ def stats(
     debug,
 ):
     """Fetch statistics from a Discord server and output them as plain text."""
-    # Setup logging
     log_level = logging.DEBUG if debug else logging.INFO
     setup_logging(log_level)
 
-    # Load configuration
     config_data = None
     if config:
         try:
             config_data = load_config(config)
-            token = token or config_data.bot.token
-            guild_id = guild_id or getattr(config_data.bot, "guild_id", None)
         except FileNotFoundError as e:
             logging.error(f"Error: {e}")
             sys.exit(1)
 
-    # Validate required parameters
-    if not token:
-        logging.error("Discord bot token is required (--token or config file)")
-        sys.exit(1)
+    token, guild_id = _resolve_credentials(config_data, token, guild_id)
+    start, end = _resolve_dates(start_date, end_date, config_data)
 
-    if not guild_id:
-        logging.error("Discord guild ID is required (--guild-id or config file)")
-        sys.exit(1)
-
-    # Parse dates
-    now = datetime.now()
-    default_start = now - timedelta(weeks=4)
-
-    # Get dates from config if available
-    config_start = None
-    config_end = None
-    if config_data and hasattr(config_data.bot, "stats_config"):
-        config_start = getattr(config_data.bot.stats_config, "start_date", None)
-        config_end = getattr(config_data.bot.stats_config, "end_date", None)
-
-    # Parse dates with fallbacks
-    start = parse_date(start_date, default_start, config_start, "start date")
-    end = parse_date(end_date, now, config_end, "end date")
-
-    # Validate date range
-    if end < start:
-        logging.error("End date must be after start date.")
-        sys.exit(1)
-
-    # Fetch statistics
     logging.info(
         f"Fetching statistics for guild {guild_id} from {start.date()} to {end.date()}"
     )
@@ -173,7 +178,7 @@ def stats(
             else:
                 click.echo("\nNo graphs were generated. Check the logs for errors.")
 
-    except Exception as e:
+    except Exception:
         logging.exception("Error fetching statistics")
         sys.exit(1)
 
@@ -200,51 +205,20 @@ def graphs(
     config, token, guild_id, start_date, end_date, output_dir, prefix, smooth, debug
 ):
     """Generate graphs from Discord server statistics."""
-    # Setup logging
     log_level = logging.DEBUG if debug else logging.INFO
     setup_logging(log_level)
 
-    # Load configuration
     config_data = None
     if config:
         try:
             config_data = load_config(config)
-            token = token or config_data.bot.token
-            guild_id = guild_id or getattr(config_data.bot, "guild_id", None)
         except FileNotFoundError as e:
             logging.error(f"Error: {e}")
             sys.exit(1)
 
-    # Validate required parameters
-    if not token:
-        logging.error("Discord bot token is required (--token or config file)")
-        sys.exit(1)
+    token, guild_id = _resolve_credentials(config_data, token, guild_id)
+    start, end = _resolve_dates(start_date, end_date, config_data)
 
-    if not guild_id:
-        logging.error("Discord guild ID is required (--guild-id or config file)")
-        sys.exit(1)
-
-    # Parse dates
-    now = datetime.now()
-    default_start = now - timedelta(weeks=4)
-
-    # Get dates from config if available
-    config_start = None
-    config_end = None
-    if config_data and hasattr(config_data.bot, "stats_config"):
-        config_start = getattr(config_data.bot.stats_config, "start_date", None)
-        config_end = getattr(config_data.bot.stats_config, "end_date", None)
-
-    # Parse dates with fallbacks
-    start = parse_date(start_date, default_start, config_start, "start date")
-    end = parse_date(end_date, now, config_end, "end date")
-
-    # Validate date range
-    if end < start:
-        logging.error("End date must be after start date.")
-        sys.exit(1)
-
-    # Fetch statistics
     logging.info(
         f"Fetching statistics for guild {guild_id} from {start.date()} to {end.date()}"
     )
@@ -269,7 +243,7 @@ def graphs(
         else:
             click.echo("No graphs were generated. Check the logs for errors.")
 
-    except Exception as e:
+    except Exception:
         logging.exception("Error generating graphs")
         sys.exit(1)
 
@@ -302,7 +276,7 @@ def main():
     """Entry point for the CLI tool."""
     try:
         cli()
-    except Exception as e:
+    except Exception:
         logging.exception("Unexpected error")
         sys.exit(1)
 
