@@ -10,7 +10,11 @@ from .collectors.message_stats import MessageStatisticsCollector, MessageStatist
 
 
 async def fetch_statistics(
-    token: str, guild_id: int, start_date: datetime, end_date: datetime
+    token: str,
+    guild_id: int,
+    start_date: datetime,
+    end_date: datetime,
+    history_offset: bool = True,
 ):
     """
     Fetch statistics data from Discord.
@@ -24,7 +28,7 @@ async def fetch_statistics(
     Returns:
         Statistics data object or None if an error occurred
     """
-    client = StatisticsClient(guild_id, start_date, end_date)
+    client = StatisticsClient(guild_id, start_date, end_date, history_offset=history_offset)
     task = None
 
     try:
@@ -63,7 +67,7 @@ async def fetch_statistics(
 class StatisticsClient(discord.Client):
     """Discord client for collecting server statistics."""
 
-    def __init__(self, guild_id: int, start_date: datetime, end_date: datetime):
+    def __init__(self, guild_id: int, start_date: datetime, end_date: datetime, history_offset: bool = True):
         """
         Initialize the statistics client.
 
@@ -84,6 +88,7 @@ class StatisticsClient(discord.Client):
         self.target_guild_id: int = guild_id
         self.start_date: datetime = start_date
         self.end_date: datetime = end_date
+        self.history_offset: bool = history_offset
 
         # Initialize state
         self.guild: discord.Guild | None = None
@@ -103,7 +108,8 @@ class StatisticsClient(discord.Client):
             # Collect statistics
             collector = MessageStatisticsCollector()
             self.data = await collector.collect(
-                self.guild, self.start_date, self.end_date
+                self.guild, self.start_date, self.end_date,
+                history_offset=self.history_offset,
             )
 
         except Exception as e:

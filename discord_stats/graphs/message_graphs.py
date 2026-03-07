@@ -1,13 +1,11 @@
 """Graph generator for message statistics."""
 
+import colorsys
 import logging
-from datetime import datetime
+import unicodedata
 from datetime import datetime as dt
-from datetime import timedelta
 from pathlib import Path
 from typing import Literal, Optional
-
-import unicodedata
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -37,6 +35,18 @@ class MessageGraphGenerator:
         """
         sns.set_style(style)
         plt.style.use("seaborn-v0_8")
+
+        # Use fonts with broad Unicode coverage (CJK, accents, emoji in names, etc.)
+        plt.rcParams["font.family"] = "sans-serif"
+        plt.rcParams["font.sans-serif"] = [
+            "Arial Unicode MS",   # macOS – full Unicode incl. CJK
+            "Segoe UI",           # Windows – broad Unicode
+            "Noto Sans CJK JP",   # Linux / installed Noto
+            "Noto Sans",
+            "MS Gothic",          # Windows – CJK fallback
+            "DejaVu Sans",        # matplotlib default (limited CJK)
+        ]
+        plt.rcParams["axes.unicode_minus"] = False
 
     def _smooth_data(
         self, x_data: list, y_data: list, smoothing_factor: float = 1.0
@@ -301,9 +311,9 @@ class MessageGraphGenerator:
             daily_counts = [daily_data.get(date_str, 0) for date_str in all_dates]
             dates = [dt.fromisoformat(date_str) for date_str in all_dates]
 
-            # Calculate cumulative counts
+            # Calculate cumulative counts, seeded from pre-period history
             cumulative_counts = []
-            running_total = 0
+            running_total = data.pre_period_messages_per_channel.get(channel_name, 0)
             for count in daily_counts:
                 running_total += count
                 cumulative_counts.append(running_total)
@@ -390,14 +400,7 @@ class MessageGraphGenerator:
         all_dates = data.get_all_dates_in_range()
 
         # Create the plot
-        plt.figure(figsize=(12, 8))
-
-        # Try to use a font that supports emojis if available
-        try:
-            # Set a font that might have better emoji support
-            plt.rcParams["font.family"] = "DejaVu Sans"
-        except Exception:
-            logger.debug("Could not set DejaVu Sans font")
+        plt.figure(figsize=(14, 8))
 
         # Plot each reaction with cumulative data
         for emoji, total_count, daily_data in top_reactions_data:
@@ -405,36 +408,21 @@ class MessageGraphGenerator:
             daily_counts = [daily_data.get(date_str, 0) for date_str in all_dates]
             dates = [dt.fromisoformat(date_str) for date_str in all_dates]
 
-            # Calculate cumulative counts
+            # Calculate cumulative counts, seeded from pre-period reactions
             cumulative_counts = []
-            running_total = 0
+            running_total = data.pre_period_reactions_count.get(emoji, 0)
             for count in daily_counts:
                 running_total += count
                 cumulative_counts.append(running_total)
 
-            # Get Unicode name of emoji for display
-            # Try to get the official Unicode name, fallback to the emoji itself
-            try:
-                # For combined emojis (like country flags), we use the first character
-                emoji_char = emoji[0] if emoji else "?"
-                emoji_name = unicodedata.name(emoji_char).lower().replace("_", " ")
-                # Capitalize the name for better display
-                emoji_name = emoji_name.title()
-            except (ValueError, TypeError):
-                emoji_name = f"Emoji {ord(emoji[0]) if emoji else 0}"
+            display_name = self._emoji_display_name(emoji)
+            label = f"{display_name} ({total_count})"
 
-            # Apply smoothing if requested and we have enough data points
             if smooth and len(dates) > 2:
                 x_smooth, y_smooth = self._smooth_data(
                     dates, cumulative_counts, smoothing_factor=1.5
                 )
-                plt.plot(
-                    x_smooth,
-                    y_smooth,
-                    linewidth=3,
-                    label=f"{emoji_name} ({total_count} total)",
-                    alpha=0.8,
-                )
+                plt.plot(x_smooth, y_smooth, linewidth=3, alpha=0.8, label=label)
             else:
                 plt.plot(
                     mdates.date2num(dates),
@@ -442,7 +430,7 @@ class MessageGraphGenerator:
                     marker="o",
                     linewidth=2,
                     markersize=3,
-                    label=f"{emoji_name} ({total_count} total)",
+                    label=label,
                 )
 
         # Formatting
@@ -453,7 +441,12 @@ class MessageGraphGenerator:
         )
         plt.xlabel("Date", fontsize=12)
         plt.ylabel("Cumulative Reaction Count", fontsize=12)
-        plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        plt.legend(
+            bbox_to_anchor=(1.02, 1),
+            loc="upper left",
+            fontsize=9,
+            framealpha=0.9,
+        )
         plt.grid(True, alpha=0.3)
 
         # Format x-axis
@@ -599,13 +592,7 @@ class MessageGraphGenerator:
 
         # Flatten axes array if we have a grid
         if n_authors > 2:
-            axes = axes.flatten()  # Collect all unique channel names across all authors
-        all_channels = set()
-        for _, _, channel_data in author_channel_data:
-            all_channels.update(channel_data.keys())
-
-        # Create a consistent color mapping for all channels, prioritizing popular channels
-        channel_colors = self._generate_channel_color_map(list(all_channels), data)
+            axes = axes.flatten()
 
         # Generate pie charts for each author
         chart_index = 0
@@ -621,7 +608,7 @@ class MessageGraphGenerator:
             percentages = [channel_data[ch][1] for ch in channels]
 
             # Sort channels by count for better visibility
-            sorted_indices = np.argsort(counts)[::-1]  # Sort in descending order
+            sorted_indices = np.argsort(counts)[::-1]
             channels = [channels[i] for i in sorted_indices]
             counts = [counts[i] for i in sorted_indices]
             percentages = [percentages[i] for i in sorted_indices]
@@ -635,17 +622,13 @@ class MessageGraphGenerator:
                 counts = counts[:max_channels] + [others_count]
                 percentages = percentages[:max_channels] + [others_pct]
 
-            # Get colors in the same order as the channels
-            colors = [
-                (0.75, 0.75, 0.75) if ch == "Others" else channel_colors[ch]
-                for ch in channels
-            ]
+            # Per-pie earthy palette — each pie has its own base colour
+            colors = self._get_pie_colors(chart_index, channels)
 
             # Format labels as channel names without the # symbol
-            labels = [ch if ch == "Others" else f"{ch.replace('#', '')}" for ch in channels]
+            labels = [ch if ch == "Others" else ch.replace("#", "") for ch in channels]
 
-            # Generate pie chart
-            wedges, texts, autotexts = ax.pie(
+            wedges, _, autotexts = ax.pie(
                 counts,
                 labels=None,
                 autopct="%1.1f%%",
@@ -672,7 +655,6 @@ class MessageGraphGenerator:
                 fontsize=7,
             )
 
-            # Set title for this subplot — use Discord username if available
             display_label = data.messages_per_author_username.get(author_name, author_name)
             ax.set_title(f"{display_label}\n({total_count} total messages)", fontsize=12)
 
@@ -705,9 +687,66 @@ class MessageGraphGenerator:
             plt.show()
             return None
 
+    # Earthy base colours (H 0-1, L 0-1, S 0-1) used for per-pie palettes
+    _PIE_BASE_COLORS: list[tuple[float, float, float]] = [
+        (15 / 360, 0.52, 0.48),   # Terracotta
+        (140 / 360, 0.48, 0.28),  # Sage
+        (258 / 360, 0.62, 0.38),  # Lavender
+        (345 / 360, 0.62, 0.32),  # Dusty rose
+        (215 / 360, 0.50, 0.34),  # Slate blue
+        (38 / 360, 0.58, 0.52),   # Amber
+        (180 / 360, 0.46, 0.32),  # Teal
+        (300 / 360, 0.58, 0.22),  # Mauve
+        (200 / 360, 0.52, 0.28),  # Steel
+    ]
+
+    def _get_pie_colors(
+        self, chart_index: int, channels: list[str]
+    ) -> list[tuple[float, float, float]]:
+        """
+        Generate per-pie slice colours from the earthy base palette.
+
+        The first slice (largest) uses the base lightness; each subsequent main
+        slice is lightened by 0.065.  The "Others" slice is desaturated to a
+        near-grey.
+        """
+        h, l_base, s_base = self._PIE_BASE_COLORS[chart_index % len(self._PIE_BASE_COLORS)]
+        colors: list[tuple[float, float, float]] = []
+        main_idx = 0
+        for ch in channels:
+            if ch == "Others":
+                colors.append(colorsys.hls_to_rgb(h, 0.80, 0.10))
+            else:
+                l = min(l_base + main_idx * 0.065, 0.84)
+                colors.append(colorsys.hls_to_rgb(h, l, s_base))
+                main_idx += 1
+        return colors
+
+    @staticmethod
+    def _emoji_display_name(emoji_str: str) -> str:
+        """
+        Return a human-readable display name for an emoji without rendering
+        the glyph character (avoids 'missing from font' warnings).
+
+        Custom Discord emoji  →  'emoji_name'
+        Unicode emoji         →  full Unicode name, title-cased
+        """
+        if emoji_str.startswith("<") and ":" in emoji_str:
+            # '<:name:123>' or '<a:name:123>'
+            parts = emoji_str.strip("<>").split(":")
+            name = parts[1] if len(parts) >= 2 else emoji_str
+            return name.replace("_", " ")
+
+        try:
+            # Find first non-ASCII char (skip variation selectors)
+            char = next(c for c in emoji_str if ord(c) > 0xFF)
+            return unicodedata.name(char).title()
+        except (StopIteration, ValueError):
+            return emoji_str[:15]
+
     def _generate_channel_color_map(
         self, all_channel_names: list[str], data: Optional[MessageStatisticsData] = None
-    ) -> dict[str, tuple]:
+    ) -> dict[str, tuple[float, ...]]:
         """
         Generate a consistent color mapping for channels, prioritizing most popular channels.
 
@@ -816,14 +855,13 @@ class MessageGraphGenerator:
             daily_counts = [daily_data.get(date_str, 0) for date_str in all_dates]
             dates = [dt.fromisoformat(date_str) for date_str in all_dates]
 
-            # Calculate cumulative counts
+            # Calculate cumulative counts, seeded from pre-period history
             cumulative_counts = []
-            running_total = 0
+            running_total = data.pre_period_messages_per_author.get(author_name, 0)
             for count in daily_counts:
                 running_total += count
                 cumulative_counts.append(running_total)
 
-            # Apply smoothing if requested and we have enough data points
             if smooth and len(dates) > 2:
                 x_smooth, y_smooth = self._smooth_data(
                     dates, cumulative_counts, smoothing_factor=1.5
@@ -832,7 +870,7 @@ class MessageGraphGenerator:
                     x_smooth,
                     y_smooth,
                     linewidth=3,
-                    label=f"{author_name} ({total_count} total)",
+                    label=f"{data.messages_per_author_username.get(author_name, author_name)} ({total_count} total)",
                     alpha=0.8,
                 )
             else:
@@ -844,7 +882,7 @@ class MessageGraphGenerator:
                     marker="o",
                     linewidth=2,
                     markersize=3,
-                    label=f"{author_name} ({total_count} total)",
+                    label=f"{data.messages_per_author_username.get(author_name, author_name)} ({total_count} total)",
                 )
 
         # Formatting
