@@ -32,7 +32,7 @@ async def fetch_statistics(
         task = asyncio.create_task(client.start(token))
 
         # Wait for the bot to be ready and data to be collected
-        await asyncio.wait_for(client.ready.wait(), timeout=60)
+        await asyncio.wait_for(client.ready.wait(), timeout=120)
 
         # Add bot's ID to the data if available
         if client.data and client.user:

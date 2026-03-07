@@ -112,7 +112,7 @@ class StatisticsBot(commands.Bot):
             ctx,
             start_date: str | None = None,
             end_date: str | None = None,
-            smooth: str | None = None
+            smooth: str | None = None,
         ):
             """
             Generate and upload graphs of server statistics.
@@ -155,7 +155,12 @@ class StatisticsBot(commands.Bot):
 
                     # Parse smooth parameter
                     use_smooth = True
-                    if smooth is not None and smooth.lower() in ['off', 'false', 'no', '0']:
+                    if smooth is not None and smooth.lower() in [
+                        "off",
+                        "false",
+                        "no",
+                        "0",
+                    ]:
                         use_smooth = False
 
                     # Collect statistics
