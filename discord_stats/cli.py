@@ -178,7 +178,7 @@ def stats(
             else:
                 click.echo("\nNo graphs were generated. Check the logs for errors.")
 
-    except Exception as e:
+    except Exception:
         logging.exception("Error fetching statistics")
         sys.exit(1)
 
@@ -243,7 +243,7 @@ def graphs(
         else:
             click.echo("No graphs were generated. Check the logs for errors.")
 
-    except Exception as e:
+    except Exception:
         logging.exception("Error generating graphs")
         sys.exit(1)
 
@@ -276,7 +276,7 @@ def main():
     """Entry point for the CLI tool."""
     try:
         cli()
-    except Exception as e:
+    except Exception:
         logging.exception("Unexpected error")
         sys.exit(1)
 
