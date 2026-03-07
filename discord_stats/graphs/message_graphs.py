@@ -3,7 +3,6 @@
 import colorsys
 import logging
 import unicodedata
-import urllib.request
 from datetime import datetime as dt
 from pathlib import Path
 from typing import Literal, Optional
@@ -400,51 +399,8 @@ class MessageGraphGenerator:
 
         all_dates = data.get_all_dates_in_range()
 
-        from matplotlib.image import BboxImage
-        from matplotlib.legend_handler import HandlerBase
-        from matplotlib.transforms import Bbox, TransformedBbox
-
-        class _EmojiLegendHandler(HandlerBase):
-            """Draws a small emoji image + colored line swatch in the legend key."""
-
-            def __init__(self, emoji_img: "np.ndarray | None" = None) -> None:
-                super().__init__()
-                self.emoji_img = emoji_img
-
-            def create_artists(self, legend, orig_handle, xdescent, ydescent, width, height, fontsize, trans):  # type: ignore[override]
-                import matplotlib.lines as mlines
-
-                color = orig_handle.get_color()  # type: ignore[union-attr]
-                artists = []
-
-                if self.emoji_img is not None:
-                    img_size = height
-                    bbox = Bbox([[xdescent, ydescent], [xdescent + img_size, ydescent + img_size]])
-                    tbbox = TransformedBbox(bbox, trans)
-                    img_artist = BboxImage(tbbox, interpolation="bilinear", zorder=3)
-                    img_artist.set_data(self.emoji_img)
-                    img_artist.set_clip_on(False)
-                    artists.append(img_artist)
-                    line = mlines.Line2D(
-                        [xdescent + img_size + 3, xdescent + width],
-                        [ydescent + height / 2, ydescent + height / 2],
-                        color=color, linewidth=2, transform=trans,
-                    )
-                else:
-                    line = mlines.Line2D(
-                        [xdescent, xdescent + width],
-                        [ydescent + height / 2, ydescent + height / 2],
-                        color=color, linewidth=2, transform=trans,
-                    )
-                artists.append(line)
-                return artists
-
         # Create the plot
-        plt.figure(figsize=(12, 8))
-
-        line_handles = []
-        line_labels = []
-        handler_map: dict[object, object] = {}
+        plt.figure(figsize=(14, 8))
 
         # Plot each reaction with cumulative data
         for emoji, total_count, daily_data in top_reactions_data:
@@ -459,30 +415,23 @@ class MessageGraphGenerator:
                 running_total += count
                 cumulative_counts.append(running_total)
 
-            # Attempt to fetch Twemoji image; get text name as fallback
-            emoji_img = self._get_emoji_image(emoji)
             display_name = self._emoji_display_name(emoji)
-
-            # Label: just count if we have an image, else include text name
-            label = f"({total_count})" if emoji_img is not None else f"{display_name} ({total_count})"
+            label = f"{display_name} ({total_count})"
 
             if smooth and len(dates) > 2:
                 x_smooth, y_smooth = self._smooth_data(
                     dates, cumulative_counts, smoothing_factor=1.5
                 )
-                (line,) = plt.plot(x_smooth, y_smooth, linewidth=3, alpha=0.8)
+                plt.plot(x_smooth, y_smooth, linewidth=3, alpha=0.8, label=label)
             else:
-                (line,) = plt.plot(
+                plt.plot(
                     mdates.date2num(dates),
                     cumulative_counts,
                     marker="o",
                     linewidth=2,
                     markersize=3,
+                    label=label,
                 )
-
-            line_handles.append(line)
-            line_labels.append(label)
-            handler_map[line] = _EmojiLegendHandler(emoji_img)
 
         # Formatting
         plt.title(
@@ -493,11 +442,10 @@ class MessageGraphGenerator:
         plt.xlabel("Date", fontsize=12)
         plt.ylabel("Cumulative Reaction Count", fontsize=12)
         plt.legend(
-            line_handles,
-            line_labels,
-            handler_map=handler_map,
-            bbox_to_anchor=(1.05, 1),
+            bbox_to_anchor=(1.02, 1),
             loc="upper left",
+            fontsize=9,
+            framealpha=0.9,
         )
         plt.grid(True, alpha=0.3)
 
@@ -707,7 +655,8 @@ class MessageGraphGenerator:
                 fontsize=7,
             )
 
-            ax.set_title(f"{author_name}\n({total_count} total messages)", fontsize=12)
+            display_label = data.messages_per_author_username.get(author_name, author_name)
+            ax.set_title(f"{display_label}\n({total_count} total messages)", fontsize=12)
 
             # Increment chart index
             chart_index += 1
@@ -773,52 +722,6 @@ class MessageGraphGenerator:
                 main_idx += 1
         return colors
 
-    def _get_emoji_image(self, emoji_str: str) -> "np.ndarray | None":
-        """
-        Return a numpy RGBA array for a Unicode emoji via Twemoji CDN (cached).
-        Returns None for custom Discord emoji or on any network/parse failure.
-        """
-        # Custom Discord emoji: '<:name:id>' or '<a:name:id>'
-        if emoji_str.startswith("<") and ":" in emoji_str:
-            return None
-
-        try:
-            from PIL import Image
-        except ImportError:
-            logger.debug("Pillow not installed; emoji images unavailable")
-            return None
-
-        try:
-            # Build Twemoji codepoint string, stripping variation selectors (U+FE0F)
-            codepoints = "-".join(
-                format(ord(c), "x") for c in emoji_str if ord(c) != 0xFE0F
-            )
-            if not codepoints:
-                return None
-
-            cache_dir = Path.home() / ".cache" / "discord-stats" / "emoji"
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            cache_path = cache_dir / f"{codepoints}.png"
-
-            if not cache_path.exists():
-                url = (
-                    f"https://cdn.jsdelivr.net/npm/twemoji@14.0.2"
-                    f"/assets/72x72/{codepoints}.png"
-                )
-                try:
-                    with urllib.request.urlopen(url, timeout=5) as resp:
-                        cache_path.write_bytes(resp.read())
-                except Exception as exc:
-                    logger.debug(f"Twemoji download failed for {codepoints!r}: {exc}")
-                    return None
-
-            img = Image.open(cache_path).convert("RGBA")
-            # Normalise to float32 [0, 1] for reliable matplotlib rendering
-            return np.array(img, dtype=np.float32) / 255.0
-        except Exception as exc:
-            logger.debug(f"Emoji image error for {emoji_str!r}: {exc}")
-            return None
-
     @staticmethod
     def _emoji_display_name(emoji_str: str) -> str:
         """
@@ -826,7 +729,7 @@ class MessageGraphGenerator:
         the glyph character (avoids 'missing from font' warnings).
 
         Custom Discord emoji  →  'emoji_name'
-        Unicode emoji         →  first three words of the Unicode name, title-cased
+        Unicode emoji         →  full Unicode name, title-cased
         """
         if emoji_str.startswith("<") and ":" in emoji_str:
             # '<:name:123>' or '<a:name:123>'
@@ -837,8 +740,7 @@ class MessageGraphGenerator:
         try:
             # Find first non-ASCII char (skip variation selectors)
             char = next(c for c in emoji_str if ord(c) > 0xFF)
-            words = unicodedata.name(char).split()
-            return " ".join(words[:3]).title()
+            return unicodedata.name(char).title()
         except (StopIteration, ValueError):
             return emoji_str[:15]
 
@@ -968,7 +870,7 @@ class MessageGraphGenerator:
                     x_smooth,
                     y_smooth,
                     linewidth=3,
-                    label=f"{author_name} ({total_count} total)",
+                    label=f"{data.messages_per_author_username.get(author_name, author_name)} ({total_count} total)",
                     alpha=0.8,
                 )
             else:
@@ -980,7 +882,7 @@ class MessageGraphGenerator:
                     marker="o",
                     linewidth=2,
                     markersize=3,
-                    label=f"{author_name} ({total_count} total)",
+                    label=f"{data.messages_per_author_username.get(author_name, author_name)} ({total_count} total)",
                 )
 
         # Formatting

@@ -331,7 +331,7 @@ class MessageStatisticsCollector:
         # Optionally count pre-period messages to seed cumulative graph offsets
         if history_offset:
             logging.info("Collecting pre-period message counts for history offset...")
-            pre_semaphore = asyncio.Semaphore(1)
+            pre_semaphore = asyncio.Semaphore(3)
 
             async def _pre_bounded(channel: TextChannel) -> None:
                 async with pre_semaphore:
