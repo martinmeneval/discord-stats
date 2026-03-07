@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections import Counter
 from datetime import datetime, timedelta
@@ -12,7 +13,7 @@ class MessageStatisticsData:
     """Container for message statistics data."""
 
     def __init__(self):
-        self.total_messages = 0
+        self.total_messages: int = 0
         self.messages_per_author: Counter[str] = Counter()
         self.messages_per_author_id: dict[str, str] = {}  # Map author name to ID
         self.messages_per_author_username: dict[str, str] = {}  # Map author name to Discord username
@@ -20,13 +21,13 @@ class MessageStatisticsData:
         self.messages_per_channel_id: dict[str, int] = {}  # Map channel name to ID
         self.messages_per_thread: Counter[str] = Counter()  # Track messages per thread
         self.messages_per_thread_id: dict[str, int] = {}  # Map thread name to ID
-        self.total_thread_messages = 0  # Track total messages in all threads
+        self.total_thread_messages: int = 0  # Track total messages in all threads
         self.pictures_per_author: Counter[str] = Counter()
-        self.total_pictures = 0
-        self.days_in_period = 0
-        self.bot_id = None  # Store the bot's user ID
+        self.total_pictures: int = 0
+        self.days_in_period: int = 0
+        self.bot_id: int | None = None  # Store the bot's user ID
         self.reactions_count: Counter[str] = Counter()  # Count of each reaction emoji
-        self.total_reactions = 0  # Total number of reactions
+        self.total_reactions: int = 0  # Total number of reactions
         self.messages_per_author_per_channel: dict[
             str, Counter[str]
         ] = {}  # author -> {channel -> count}
@@ -268,7 +269,11 @@ class MessageStatisticsCollector:
     """
 
     async def collect(
-        self, guild: Guild, start_date: datetime, end_date: datetime
+        self,
+        guild: Guild,
+        start_date: datetime,
+        end_date: datetime,
+        concurrency: int = 10,
     ) -> MessageStatisticsData:
         """
         Collect message statistics from the guild between the given dates.
@@ -277,6 +282,7 @@ class MessageStatisticsCollector:
             guild: The Discord guild to collect statistics from
             start_date: The start date for collection (inclusive)
             end_date: The end date for collection (inclusive)
+            concurrency: Maximum number of channels to fetch simultaneously
 
         Returns:
             MessageStatisticsData object with collected statistics
@@ -293,16 +299,31 @@ class MessageStatisticsCollector:
 
         # Get accessible text channels
         channels = self._get_text_channels(guild)
-        logging.info(f"Found {len(channels)} text channels to process")
+        logging.info(
+            f"Found {len(channels)} text channels to process (concurrency={concurrency})"
+        )
 
-        # Process each channel
-        for channel in channels:
-            await self._process_channel_with_threads(
-                channel, stats, start_date, end_date
-            )
+        # Process channels concurrently, bounded by semaphore
+        semaphore = asyncio.Semaphore(concurrency)
+        remaining = len(channels)
+
+        async def _bounded(channel: TextChannel):
+            nonlocal remaining
+            async with semaphore:
+                before = stats.total_messages
+                await self._process_channel_with_threads(
+                    channel, stats, start_date, end_date
+                )
+                fetched = stats.total_messages - before
+                remaining -= 1
+                logging.info(
+                    f"#{channel.name} done — {fetched:,} messages ({remaining} channels remaining)"
+                )
+
+        _ = await asyncio.gather(*(_bounded(ch) for ch in channels))
 
         logging.info(
-            f"Statistics collection complete. Found {stats.total_messages} messages across {len(stats.messages_per_channel)} channels"
+            f"Statistics collection complete. Found {stats.total_messages:,} messages across {len(stats.messages_per_channel)} channels"
         )
         return stats
 

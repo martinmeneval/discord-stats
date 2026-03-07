@@ -6,7 +6,7 @@ from datetime import datetime
 
 import discord
 
-from .collectors.message_stats import MessageStatisticsCollector
+from .collectors.message_stats import MessageStatisticsCollector, MessageStatisticsData
 
 
 async def fetch_statistics(
@@ -32,7 +32,7 @@ async def fetch_statistics(
         task = asyncio.create_task(client.start(token))
 
         # Wait for the bot to be ready and data to be collected
-        await asyncio.wait_for(client.ready.wait(), timeout=120)
+        _ = await asyncio.wait_for(client.ready.wait(), timeout=1800)
 
         # Add bot's ID to the data if available
         if client.data and client.user:
@@ -53,7 +53,7 @@ async def fetch_statistics(
 
         # Cancel any pending tasks
         if task and not task.done():
-            task.cancel()
+            _ = task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
@@ -81,14 +81,14 @@ class StatisticsClient(discord.Client):
         super().__init__(intents=intents)
 
         # Store parameters
-        self.target_guild_id = guild_id
-        self.start_date = start_date
-        self.end_date = end_date
+        self.target_guild_id: int = guild_id
+        self.start_date: datetime = start_date
+        self.end_date: datetime = end_date
 
         # Initialize state
-        self.guild = None
-        self.data = None
-        self.ready = asyncio.Event()
+        self.guild: discord.Guild | None = None
+        self.data: MessageStatisticsData | None = None
+        self.ready: asyncio.Event = asyncio.Event()
 
     async def on_ready(self):
         """Called when the bot is ready and connected."""
