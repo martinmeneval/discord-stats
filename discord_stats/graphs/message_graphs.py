@@ -37,6 +37,18 @@ class MessageGraphGenerator:
         sns.set_style(style)
         plt.style.use("seaborn-v0_8")
 
+        # Use fonts with broad Unicode coverage (CJK, accents, emoji in names, etc.)
+        plt.rcParams["font.family"] = "sans-serif"
+        plt.rcParams["font.sans-serif"] = [
+            "Arial Unicode MS",   # macOS – full Unicode incl. CJK
+            "Segoe UI",           # Windows – broad Unicode
+            "Noto Sans CJK JP",   # Linux / installed Noto
+            "Noto Sans",
+            "MS Gothic",          # Windows – CJK fallback
+            "DejaVu Sans",        # matplotlib default (limited CJK)
+        ]
+        plt.rcParams["axes.unicode_minus"] = False
+
     def _smooth_data(
         self, x_data: list, y_data: list, smoothing_factor: float = 1.0
     ) -> tuple[list, list]:
@@ -409,8 +421,9 @@ class MessageGraphGenerator:
                     img_size = height
                     bbox = Bbox([[xdescent, ydescent], [xdescent + img_size, ydescent + img_size]])
                     tbbox = TransformedBbox(bbox, trans)
-                    img_artist = BboxImage(tbbox, interpolation="antialiased", zorder=3)
+                    img_artist = BboxImage(tbbox, interpolation="bilinear", zorder=3)
                     img_artist.set_data(self.emoji_img)
+                    img_artist.set_clip_on(False)
                     artists.append(img_artist)
                     line = mlines.Line2D(
                         [xdescent + img_size + 3, xdescent + width],
@@ -771,7 +784,11 @@ class MessageGraphGenerator:
 
         try:
             from PIL import Image
+        except ImportError:
+            logger.debug("Pillow not installed; emoji images unavailable")
+            return None
 
+        try:
             # Build Twemoji codepoint string, stripping variation selectors (U+FE0F)
             codepoints = "-".join(
                 format(ord(c), "x") for c in emoji_str if ord(c) != 0xFE0F
@@ -791,12 +808,15 @@ class MessageGraphGenerator:
                 try:
                     with urllib.request.urlopen(url, timeout=5) as resp:
                         cache_path.write_bytes(resp.read())
-                except Exception:
+                except Exception as exc:
+                    logger.debug(f"Twemoji download failed for {codepoints!r}: {exc}")
                     return None
 
             img = Image.open(cache_path).convert("RGBA")
-            return np.array(img)
-        except Exception:
+            # Normalise to float32 [0, 1] for reliable matplotlib rendering
+            return np.array(img, dtype=np.float32) / 255.0
+        except Exception as exc:
+            logger.debug(f"Emoji image error for {emoji_str!r}: {exc}")
             return None
 
     @staticmethod
