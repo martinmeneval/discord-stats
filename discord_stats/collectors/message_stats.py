@@ -7,8 +7,6 @@ from discord.channel import TextChannel
 from discord.guild import Guild
 from discord.threads import Thread
 
-from . import BaseCollector
-
 
 class MessageStatisticsData:
     """Container for message statistics data."""
@@ -257,7 +255,7 @@ class MessageStatisticsData:
         return result
 
 
-class MessageStatisticsCollector(BaseCollector[MessageStatisticsData]):
+class MessageStatisticsCollector:
     """
     Collector for message statistics.
 
