@@ -46,6 +46,10 @@ class MessageStatisticsData:
         self.start_date: datetime | None = None
         self.end_date: datetime | None = None
 
+        # Pre-period counts for cumulative graph offsets
+        self.pre_period_messages_per_channel: dict[str, int] = {}
+        self.pre_period_messages_per_author: dict[str, int] = {}
+
     @property
     def avg_messages_per_day(self) -> float:
         """Calculate average messages per day."""
@@ -274,6 +278,7 @@ class MessageStatisticsCollector:
         start_date: datetime,
         end_date: datetime,
         concurrency: int = 10,
+        history_offset: bool = True,
     ) -> MessageStatisticsData:
         """
         Collect message statistics from the guild between the given dates.
@@ -322,10 +327,73 @@ class MessageStatisticsCollector:
 
         _ = await asyncio.gather(*(_bounded(ch) for ch in channels))
 
+        # Optionally count pre-period messages to seed cumulative graph offsets
+        if history_offset:
+            logging.info("Collecting pre-period message counts for history offset...")
+            pre_semaphore = asyncio.Semaphore(concurrency)
+
+            async def _pre_bounded(channel: TextChannel) -> None:
+                async with pre_semaphore:
+                    await self._collect_pre_period_counts(channel, stats, start_date)
+
+            _ = await asyncio.gather(*(_pre_bounded(ch) for ch in channels))
+            logging.info("Pre-period count collection complete.")
+
         logging.info(
             f"Statistics collection complete. Found {stats.total_messages:,} messages across {len(stats.messages_per_channel)} channels"
         )
         return stats
+
+    async def _collect_pre_period_counts(
+        self,
+        channel: TextChannel,
+        stats: MessageStatisticsData,
+        start_date: datetime,
+    ) -> None:
+        """
+        Count messages posted before start_date in the channel (and its threads).
+        Only counts; does not process content.
+        """
+        channel_count = 0
+        author_counts: Counter[str] = Counter()
+
+        try:
+            async for message in channel.history(
+                before=start_date, limit=None, oldest_first=False
+            ):
+                if message.author.bot:
+                    continue
+                channel_count += 1
+                author_counts[message.author.display_name] += 1
+        except discord.Forbidden:
+            pass
+        except Exception as exc:
+            logging.warning(f"Pre-period count failed for #{channel.name}: {exc}")
+
+        # Also count archived threads
+        try:
+            async for thread in channel.archived_threads(limit=None):
+                try:
+                    async for message in thread.history(
+                        before=start_date, limit=None, oldest_first=False
+                    ):
+                        if message.author.bot:
+                            continue
+                        channel_count += 1
+                        author_counts[message.author.display_name] += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        if channel_count > 0:
+            stats.pre_period_messages_per_channel[channel.name] = (
+                stats.pre_period_messages_per_channel.get(channel.name, 0) + channel_count
+            )
+            for author, count in author_counts.items():
+                stats.pre_period_messages_per_author[author] = (
+                    stats.pre_period_messages_per_author.get(author, 0) + count
+                )
 
     def _get_text_channels(self, guild: Guild) -> list[TextChannel]:
         """Get a list of accessible text channels in the guild."""

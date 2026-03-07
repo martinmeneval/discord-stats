@@ -105,6 +105,11 @@ def cli():
     default=True,
     help="Apply smoothing to line graphs when generating graphs (default: on)",
 )
+@click.option(
+    "--history-offset/--no-history-offset",
+    default=True,
+    help="Seed cumulative graphs from pre-period message counts (default: on; adds an extra fetch pass)",
+)
 @click.option("--debug/--no-debug", default=False, help="Enable debug logging")
 def stats(
     config,
@@ -116,6 +121,7 @@ def stats(
     generate_graphs,
     graphs_dir,
     smooth,
+    history_offset,
     debug,
 ):
     """Fetch statistics from a Discord server and output them as plain text."""
@@ -138,7 +144,7 @@ def stats(
     )
 
     try:
-        stats_data = asyncio.run(fetch_statistics(token, guild_id, start, end))
+        stats_data = asyncio.run(fetch_statistics(token, guild_id, start, end, history_offset=history_offset))
 
         if not stats_data:
             logging.error("Failed to fetch statistics data")
