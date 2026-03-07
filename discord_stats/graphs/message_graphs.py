@@ -409,7 +409,8 @@ class MessageGraphGenerator:
                     img_size = height
                     bbox = Bbox([[xdescent, ydescent], [xdescent + img_size, ydescent + img_size]])
                     tbbox = TransformedBbox(bbox, trans)
-                    img_artist = BboxImage(tbbox, data=self.emoji_img, interpolation="antialiased", zorder=3)
+                    img_artist = BboxImage(tbbox, interpolation="antialiased", zorder=3)
+                    img_artist.set_data(self.emoji_img)
                     artists.append(img_artist)
                     line = mlines.Line2D(
                         [xdescent + img_size + 3, xdescent + width],
@@ -438,9 +439,9 @@ class MessageGraphGenerator:
             daily_counts = [daily_data.get(date_str, 0) for date_str in all_dates]
             dates = [dt.fromisoformat(date_str) for date_str in all_dates]
 
-            # Calculate cumulative counts
+            # Calculate cumulative counts, seeded from pre-period reactions
             cumulative_counts = []
-            running_total = 0
+            running_total = data.pre_period_reactions_count.get(emoji, 0)
             for count in daily_counts:
                 running_total += count
                 cumulative_counts.append(running_total)
@@ -693,9 +694,7 @@ class MessageGraphGenerator:
                 fontsize=7,
             )
 
-            # Set title for this subplot — use Discord username if available
-            display_label = data.messages_per_author_username.get(author_name, author_name)
-            ax.set_title(f"{display_label}\n({total_count} total messages)", fontsize=12)
+            ax.set_title(f"{author_name}\n({total_count} total messages)", fontsize=12)
 
             # Increment chart index
             chart_index += 1
@@ -941,9 +940,6 @@ class MessageGraphGenerator:
                 running_total += count
                 cumulative_counts.append(running_total)
 
-            # Use Discord username for the legend label
-            display_name = data.messages_per_author_username.get(author_name, author_name)
-
             if smooth and len(dates) > 2:
                 x_smooth, y_smooth = self._smooth_data(
                     dates, cumulative_counts, smoothing_factor=1.5
@@ -952,7 +948,7 @@ class MessageGraphGenerator:
                     x_smooth,
                     y_smooth,
                     linewidth=3,
-                    label=f"{display_name} ({total_count} total)",
+                    label=f"{author_name} ({total_count} total)",
                     alpha=0.8,
                 )
             else:
@@ -964,7 +960,7 @@ class MessageGraphGenerator:
                     marker="o",
                     linewidth=2,
                     markersize=3,
-                    label=f"{display_name} ({total_count} total)",
+                    label=f"{author_name} ({total_count} total)",
                 )
 
         # Formatting

@@ -49,6 +49,7 @@ class MessageStatisticsData:
         # Pre-period counts for cumulative graph offsets
         self.pre_period_messages_per_channel: dict[str, int] = {}
         self.pre_period_messages_per_author: dict[str, int] = {}
+        self.pre_period_reactions_count: Counter[str] = Counter()
 
     @property
     def avg_messages_per_day(self) -> float:
@@ -330,13 +331,13 @@ class MessageStatisticsCollector:
         # Optionally count pre-period messages to seed cumulative graph offsets
         if history_offset:
             logging.info("Collecting pre-period message counts for history offset...")
-            pre_semaphore = asyncio.Semaphore(concurrency)
+            pre_semaphore = asyncio.Semaphore(min(3, concurrency))
 
             async def _pre_bounded(channel: TextChannel) -> None:
                 async with pre_semaphore:
                     await self._collect_pre_period_counts(channel, stats, start_date)
 
-            _ = await asyncio.gather(*(_pre_bounded(ch) for ch in channels))
+            _ = await asyncio.gather(*(_pre_bounded(ch) for ch in channels))  # type: ignore[arg-type]
             logging.info("Pre-period count collection complete.")
 
         logging.info(
@@ -354,17 +355,26 @@ class MessageStatisticsCollector:
         Count messages posted before start_date in the channel (and its threads).
         Only counts; does not process content.
         """
+        channel_key = f"#{channel.name}"
         channel_count = 0
         author_counts: Counter[str] = Counter()
+        reaction_counts: Counter[str] = Counter()
+
+        def _tally(message: discord.Message) -> None:
+            if getattr(message.author, "bot", False):
+                return
+            nonlocal channel_count
+            channel_count += 1
+            author_counts[message.author.display_name] += 1
+            for reaction in message.reactions:
+                emoji_key = str(reaction.emoji)
+                reaction_counts[emoji_key] += reaction.count
 
         try:
             async for message in channel.history(
                 before=start_date, limit=None, oldest_first=False
             ):
-                if message.author.bot:
-                    continue
-                channel_count += 1
-                author_counts[message.author.display_name] += 1
+                _tally(message)
         except discord.Forbidden:
             pass
         except Exception as exc:
@@ -377,23 +387,22 @@ class MessageStatisticsCollector:
                     async for message in thread.history(
                         before=start_date, limit=None, oldest_first=False
                     ):
-                        if message.author.bot:
-                            continue
-                        channel_count += 1
-                        author_counts[message.author.display_name] += 1
+                        _tally(message)
                 except Exception:
                     pass
         except Exception:
             pass
 
         if channel_count > 0:
-            stats.pre_period_messages_per_channel[channel.name] = (
-                stats.pre_period_messages_per_channel.get(channel.name, 0) + channel_count
+            stats.pre_period_messages_per_channel[channel_key] = (
+                stats.pre_period_messages_per_channel.get(channel_key, 0) + channel_count
             )
             for author, count in author_counts.items():
                 stats.pre_period_messages_per_author[author] = (
                     stats.pre_period_messages_per_author.get(author, 0) + count
                 )
+        for emoji_key, count in reaction_counts.items():
+            stats.pre_period_reactions_count[emoji_key] += count
 
     def _get_text_channels(self, guild: Guild) -> list[TextChannel]:
         """Get a list of accessible text channels in the guild."""
