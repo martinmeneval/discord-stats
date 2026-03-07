@@ -18,12 +18,12 @@ def load_config(config_path: str | None = None) -> Config:
     if config_path is None:
         config_path = os.environ.get("DISCORD_STATS_CONFIG", "config.json")
 
-    config_path = Path(config_path)
+    path = Path(config_path)
 
-    if not config_path.exists():
-        raise FileNotFoundError(f"Configuration file not found: {config_path}")
+    if not path.exists():
+        raise FileNotFoundError(f"Configuration file not found: {path}")
 
-    with open(config_path, "r") as f:
+    with open(path, "r") as f:
         config_data = json.load(f)
 
     return Config(**config_data)
