@@ -30,6 +30,4 @@ class BaseFormatter(Generic[T], ABC):
         pass
 
 
-from .message_stats import MessageStatisticsFormatter
-
-__all__ = ["BaseFormatter", "MessageStatisticsFormatter"]
+__all__ = ["BaseFormatter"]
