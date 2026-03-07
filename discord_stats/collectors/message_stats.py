@@ -17,6 +17,7 @@ class MessageStatisticsData:
         self.total_messages = 0
         self.messages_per_author: Counter[str] = Counter()
         self.messages_per_author_id: dict[str, str] = {}  # Map author name to ID
+        self.messages_per_author_username: dict[str, str] = {}  # Map author name to Discord username
         self.messages_per_channel: Counter[str] = Counter()
         self.messages_per_channel_id: dict[str, int] = {}  # Map channel name to ID
         self.messages_per_thread: Counter[str] = Counter()  # Track messages per thread
@@ -383,6 +384,7 @@ class MessageStatisticsCollector(BaseCollector[MessageStatisticsData]):
             message.author, "display_name", f"User {message.author.id}"
         )
         author_id = str(message.author.id)
+        author_username = getattr(message.author, "name", author_name)
 
         # Get message date as ISO string for time series
         message_date = message.created_at.date().isoformat()
@@ -391,6 +393,7 @@ class MessageStatisticsCollector(BaseCollector[MessageStatisticsData]):
         stats.total_messages += 1
         stats.messages_per_author[author_name] += 1
         stats.messages_per_author_id[author_name] = author_id
+        stats.messages_per_author_username[author_name] = author_username
         stats.messages_per_channel[channel_name] += 1
         stats.messages_per_channel_id[channel_name] = message.channel.id
 

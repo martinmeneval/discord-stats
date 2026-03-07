@@ -156,6 +156,7 @@ class MessageGraphGenerator:
             file_path = self.generate_top_authors_channel_distribution_pies(
                 data,
                 str(output_path / f"{prefix}_top_authors_channel_distribution.png"),
+                top_n=9,
             )
             if file_path:
                 generated_files.append(file_path)
@@ -163,15 +164,6 @@ class MessageGraphGenerator:
             # Generate daily activity heatmap
             file_path = self.generate_daily_activity_heatmap(
                 data, str(output_path / f"{prefix}_daily_activity_heatmap.png")
-            )
-            if file_path:
-                generated_files.append(file_path)
-
-            # Generate top authors channel distribution pie charts
-            file_path = self.generate_top_authors_channel_distribution_pies(
-                data,
-                str(output_path / f"{prefix}_top_authors_channel_distribution.png"),
-                top_n=12,
             )
             if file_path:
                 generated_files.append(file_path)
@@ -625,8 +617,8 @@ class MessageGraphGenerator:
 
             # Extract channel names, counts and percentages for this author
             channels = list(channel_data.keys())
-            counts = [data[0] for data in channel_data.values()]
-            percentages = [data[1] for data in channel_data.values()]
+            counts = [channel_data[ch][0] for ch in channels]
+            percentages = [channel_data[ch][1] for ch in channels]
 
             # Sort channels by count for better visibility
             sorted_indices = np.argsort(counts)[::-1]  # Sort in descending order
@@ -634,11 +626,23 @@ class MessageGraphGenerator:
             counts = [counts[i] for i in sorted_indices]
             percentages = [percentages[i] for i in sorted_indices]
 
+            # Keep top 5 channels, collapse the rest into "Others"
+            max_channels = 5
+            if len(channels) > max_channels:
+                others_count = sum(counts[max_channels:])
+                others_pct = sum(percentages[max_channels:])
+                channels = channels[:max_channels] + ["Others"]
+                counts = counts[:max_channels] + [others_count]
+                percentages = percentages[:max_channels] + [others_pct]
+
             # Get colors in the same order as the channels
-            colors = [channel_colors[channel] for channel in channels]
+            colors = [
+                (0.75, 0.75, 0.75) if ch == "Others" else channel_colors[ch]
+                for ch in channels
+            ]
 
             # Format labels as channel names without the # symbol
-            labels = [f"{ch.replace('#', '')}" for ch in channels]
+            labels = [ch if ch == "Others" else f"{ch.replace('#', '')}" for ch in channels]
 
             # Generate pie chart
             wedges, texts, autotexts = ax.pie(
@@ -668,21 +672,22 @@ class MessageGraphGenerator:
                 fontsize=7,
             )
 
-            # Set title for this subplot
-            ax.set_title(f"{author_name}\n({total_count} total messages)", fontsize=12)
+            # Set title for this subplot — use Discord username if available
+            display_label = data.messages_per_author_username.get(author_name, author_name)
+            ax.set_title(f"{display_label}\n({total_count} total messages)", fontsize=12)
 
             # Increment chart index
             chart_index += 1
 
-        # Adjust layout with more padding
-        plt.tight_layout(pad=4.0)
+        # Adjust layout, reserving top 8% for suptitle and tightening row spacing
+        plt.tight_layout(rect=(0, 0, 1, 0.92), h_pad=2.0)
 
-        # Add overall title with more space from the top
+        # Add overall title in the reserved top band
         fig.suptitle(
             "Channel Distribution for Top Authors",
             fontsize=16,
             fontweight="bold",
-            y=0.95,
+            y=0.97,
         )
 
         # Remove any unused subplots
