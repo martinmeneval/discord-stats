@@ -178,9 +178,21 @@ class MessageGraphGenerator:
                 sorted_keys = sorted(agg.keys())
                 dates = [dt.fromisoformat(k) for k in sorted_keys]
                 counts = [agg[k] for k in sorted_keys]
-            else:
+            elif cumulative:
                 dates = [dt.fromisoformat(d) for d in all_dates]
                 counts = [daily_data.get(d, 0) for d in all_dates]
+            else:
+                # Aggregate daily data into 3-day buckets for smoother curves
+                raw = [(dt.fromisoformat(d), daily_data.get(d, 0)) for d in all_dates]
+                bucket_size = 3
+                dates = []
+                counts = []
+                for j in range(0, len(raw), bucket_size):
+                    bucket = raw[j : j + bucket_size]
+                    mid = bucket[len(bucket) // 2][0]
+                    avg = sum(v for _, v in bucket) / len(bucket)
+                    dates.append(mid)
+                    counts.append(avg)
 
             if cumulative:
                 offset = pre_period_fn(name) if pre_period_fn else 0
@@ -198,7 +210,7 @@ class MessageGraphGenerator:
             label = f"{display} ({total_count} total)"
 
             if smooth and len(dates) > 2:
-                sigma = max(3.0, len(dates) * 0.07)
+                sigma = max(1.5, len(dates) * 0.1)
                 x_s, y_s = self._smooth_data(dates, counts, smoothing_factor=sigma)
                 plt.plot(x_s, y_s, linewidth=3, alpha=0.8, label=label, color=color)
             else:
