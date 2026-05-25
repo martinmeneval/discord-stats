@@ -235,6 +235,8 @@ class MessageGraphGenerator:
         plt.grid(True, alpha=0.3)
 
         ax = plt.gca()
+        if cumulative:
+            ax.set_yscale("symlog", linthresh=1)
         self._format_date_axis(ax, len(all_dates), use_auto=weekly)
 
         return self._save_or_show(output_path, log_msg)
@@ -432,57 +434,57 @@ class MessageGraphGenerator:
 
         _try_generate(
             self.generate_messages_per_day_graph,
-            data, str(output_path / f"{prefix}_messages_per_day.png"), smooth=smooth,
+            data, str(output_path / f"{prefix}_daily_messages.png"), smooth=smooth,
         )
 
         # Cumulative over-time graphs — only when pre-period data was collected
         if history_offset:
             _try_generate(
                 self.generate_top_authors_over_time_graph,
-                data, str(output_path / f"{prefix}_top_authors_over_time.png"), smooth=False,
+                data, str(output_path / f"{prefix}_cumulative_top_authors.png"), smooth=False,
             )
             _try_generate(
                 self.generate_top_channels_over_time_graph,
-                data, str(output_path / f"{prefix}_top_channels_over_time.png"), smooth=False,
+                data, str(output_path / f"{prefix}_cumulative_top_channels.png"), smooth=False,
             )
             _try_generate(
                 self.generate_top_reactions_over_time_graph,
-                data, str(output_path / f"{prefix}_top_reactions_over_time.png"), smooth=False,
+                data, str(output_path / f"{prefix}_cumulative_top_reactions.png"), smooth=False,
             )
 
         # Weekly line graphs (always generated)
         _try_generate(
             self.generate_top_authors_per_week_graph,
-            data, str(output_path / f"{prefix}_top_authors_per_week.png"), smooth=smooth,
+            data, str(output_path / f"{prefix}_weekly_top_authors.png"), smooth=smooth,
         )
         _try_generate(
             self.generate_top_channels_per_week_graph,
-            data, str(output_path / f"{prefix}_top_channels_per_week.png"), smooth=smooth,
+            data, str(output_path / f"{prefix}_weekly_top_channels.png"), smooth=smooth,
         )
         _try_generate(
             self.generate_top_reactions_per_week_graph,
-            data, str(output_path / f"{prefix}_top_reactions_per_week.png"), smooth=smooth,
+            data, str(output_path / f"{prefix}_weekly_top_reactions.png"), smooth=smooth,
         )
 
         _try_generate(
             self.generate_top_authors_channel_distribution_pies,
-            data, str(output_path / f"{prefix}_top_authors_channel_distribution.png"), top_n=9,
+            data, str(output_path / f"{prefix}_periodic_author_channel_distribution.png"), top_n=9,
         )
         _try_generate(
             self.generate_daily_activity_heatmap,
-            data, str(output_path / f"{prefix}_daily_activity_heatmap.png"),
+            data, str(output_path / f"{prefix}_periodic_daily_activity_heatmap.png"),
         )
         _try_generate(
             self.generate_top_threads_bar_chart,
-            data, str(output_path / f"{prefix}_top_threads.png"),
+            data, str(output_path / f"{prefix}_periodic_top_threads.png"),
         )
         _try_generate(
             self.generate_author_share_over_time_graph,
-            data, str(output_path / f"{prefix}_author_share_over_time.png"), smooth=smooth,
+            data, str(output_path / f"{prefix}_periodic_author_share.png"), smooth=smooth,
         )
         _try_generate(
             self.generate_channel_weekday_heatmap,
-            data, str(output_path / f"{prefix}_channel_weekday_heatmap.png"),
+            data, str(output_path / f"{prefix}_periodic_channel_weekday_heatmap.png"),
         )
 
         return generated_files
