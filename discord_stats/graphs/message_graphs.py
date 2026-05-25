@@ -183,7 +183,8 @@ class MessageGraphGenerator:
         all_dates = data.get_all_dates_in_range()
         plt.figure(figsize=figsize)
 
-        for name, total_count, daily_data in items:
+        for i, (name, total_count, daily_data) in enumerate(items):
+            color = self._LINE_COLORS[i % len(self._LINE_COLORS)]
             if weekly:
                 agg = data.get_weekly_data(daily_data)
                 if not agg:
@@ -205,22 +206,25 @@ class MessageGraphGenerator:
                 counts = cum
 
             display = display_name_fn(name) if display_name_fn else name
-            label = f"{display} ({total_count} total)" if not cumulative else f"{display} ({total_count} total)"
+            # Matplotlib silently hides labels starting with '_'
+            if display.startswith("_"):
+                display = "\u200B" + display
+            label = f"{display} ({total_count} total)"
 
             if smooth and len(dates) > 2:
                 sigma = 1.0 if weekly else 1.5
                 x_s, y_s = self._smooth_data(dates, counts, smoothing_factor=sigma)
-                plt.plot(x_s, y_s, linewidth=3, alpha=0.8, label=label)
+                plt.plot(x_s, y_s, linewidth=3, alpha=0.8, label=label, color=color)
             else:
                 if cumulative and not weekly:
                     plt.plot(
                         mdates.date2num(dates), counts,
-                        marker="o", linewidth=2, markersize=3, label=label,
+                        marker="o", linewidth=2, markersize=3, label=label, color=color,
                     )
                 else:
                     plt.plot(
                         dates, counts,
-                        marker="o", linewidth=2, markersize=4, label=label,
+                        marker="o", linewidth=2, markersize=4, label=label, color=color,
                     )
 
         plt.title(title, fontsize=16, fontweight="bold")
@@ -238,6 +242,23 @@ class MessageGraphGenerator:
     # ------------------------------------------------------------------
     # Colour helpers
     # ------------------------------------------------------------------
+
+    # 12 visually distinct line-graph colours (derived from the distinct_hues
+    # already used in _generate_channel_color_map, converted via HSV→hex).
+    _LINE_COLORS: list[str] = [
+        "#E62E2E",  # red        (hue 0.00)
+        "#E68A2E",  # orange     (hue 0.10)
+        "#2E6BE6",  # blue       (hue 0.58)
+        "#2EE659",  # green      (hue 0.35)
+        "#7A2EE6",  # purple     (hue 0.70)
+        "#E62EA5",  # magenta    (hue 0.90)
+        "#A5E62E",  # lime       (hue 0.20)
+        "#2EE6C1",  # teal       (hue 0.45)
+        "#2E8AE6",  # sky blue   (hue 0.55)
+        "#C12EE6",  # violet     (hue 0.80)
+        "#E6D42E",  # gold       (hue 0.15)
+        "#2EE6E6",  # cyan       (hue 0.50)
+    ]
 
     # Earthy base colours (H 0-1, L 0-1, S 0-1) used for per-pie palettes
     _PIE_BASE_COLORS: list[tuple[float, float, float]] = [
