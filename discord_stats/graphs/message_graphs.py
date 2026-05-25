@@ -236,7 +236,7 @@ class MessageGraphGenerator:
 
         ax = plt.gca()
         if cumulative:
-            ax.set_yscale("symlog", linthresh=1)
+            ax.set_yscale("function", functions=(np.sqrt, np.square))
         self._format_date_axis(ax, len(all_dates), use_auto=weekly)
 
         return self._save_or_show(output_path, log_msg)
@@ -245,44 +245,45 @@ class MessageGraphGenerator:
     # Colour helpers
     # ------------------------------------------------------------------
 
-    # 12 visually distinct line-graph colours (derived from the distinct_hues
-    # already used in _generate_channel_color_map, converted via HSV→hex).
+    # 12 muted line-graph colours (tab10 hues at reduced saturation / higher
+    # lightness so they blend well with the seaborn-v0_8 dark background).
     _LINE_COLORS: list[str] = [
-        "#E62E2E",  # red        (hue 0.00)
-        "#E68A2E",  # orange     (hue 0.10)
-        "#2E6BE6",  # blue       (hue 0.58)
-        "#2EE659",  # green      (hue 0.35)
-        "#7A2EE6",  # purple     (hue 0.70)
-        "#E62EA5",  # magenta    (hue 0.90)
-        "#A5E62E",  # lime       (hue 0.20)
-        "#2EE6C1",  # teal       (hue 0.45)
-        "#2E8AE6",  # sky blue   (hue 0.55)
-        "#C12EE6",  # violet     (hue 0.80)
-        "#E6D42E",  # gold       (hue 0.15)
-        "#2EE6E6",  # cyan       (hue 0.50)
+        "#5B9BD5",  # steel blue
+        "#ED8B67",  # salmon
+        "#6DBE6D",  # sage green
+        "#D47DBF",  # orchid
+        "#C4A96A",  # tan
+        "#9EC4E8",  # powder blue
+        "#E8A0CB",  # pink
+        "#8FD18F",  # mint
+        "#D4B76A",  # gold
+        "#A1A1D6",  # lavender
+        "#76C9C9",  # teal
+        "#E8C48A",  # peach
     ]
 
-    # Earthy base colours (H 0-1, L 0-1, S 0-1) used for per-pie palettes
+    # Brighter base colours for per-pie palettes (tab10-inspired HLS values).
+    # Each sub-slice is lightened by 0.035; "Others" is desaturated grey.
     _PIE_BASE_COLORS: list[tuple[float, float, float]] = [
-        (15 / 360, 0.52, 0.48),   # Terracotta
-        (140 / 360, 0.48, 0.28),  # Sage
-        (258 / 360, 0.62, 0.38),  # Lavender
-        (345 / 360, 0.62, 0.32),  # Dusty rose
-        (215 / 360, 0.50, 0.34),  # Slate blue
-        (38 / 360, 0.58, 0.52),   # Amber
-        (180 / 360, 0.46, 0.32),  # Teal
-        (300 / 360, 0.58, 0.22),  # Mauve
-        (200 / 360, 0.52, 0.28),  # Steel
+        (214 / 360, 0.48, 0.68),  # Blue
+        ( 24 / 360, 0.55, 0.72),  # Orange
+        (120 / 360, 0.45, 0.54),  # Green
+        (330 / 360, 0.52, 0.60),  # Rose
+        ( 45 / 360, 0.52, 0.58),  # Tan
+        (190 / 360, 0.50, 0.60),  # Teal
+        (280 / 360, 0.52, 0.56),  # Purple
+        (  0 / 360, 0.55, 0.64),  # Red
+        (160 / 360, 0.48, 0.52),  # Mint
     ]
 
     def _get_pie_colors(
         self, chart_index: int, channels: list[str]
     ) -> list[tuple[float, float, float]]:
         """
-        Generate per-pie slice colours from the earthy base palette.
+        Generate per-pie slice colours from the base palette.
 
         The first slice (largest) uses the base lightness; each subsequent main
-        slice is lightened by 0.065.  The "Others" slice is desaturated to a
+        slice is lightened by 0.035.  The "Others" slice is desaturated to a
         near-grey.
         """
         h, l_base, s_base = self._PIE_BASE_COLORS[chart_index % len(self._PIE_BASE_COLORS)]
@@ -292,7 +293,7 @@ class MessageGraphGenerator:
             if ch == "Others":
                 colors.append(colorsys.hls_to_rgb(h, 0.80, 0.10))
             else:
-                l = min(l_base + main_idx * 0.065, 0.84)
+                l = min(l_base + main_idx * 0.035, 0.84)
                 colors.append(colorsys.hls_to_rgb(h, l, s_base))
                 main_idx += 1
         return colors
@@ -527,12 +528,14 @@ class MessageGraphGenerator:
         # Create the plot
         plt.figure(figsize=(12, 6))
 
-        # Apply smoothing if requested
+        # Weekly average overlay when smoothing is enabled
         if smooth and len(df) > 2:
-            x_smooth, y_smooth = self._smooth_data(
-                df["date"].tolist(), df["messages"].tolist(), smoothing_factor=1.5
-            )
-            plt.plot(x_smooth, y_smooth, linewidth=3, alpha=0.8, label="Smoothed trend")
+            weekly_agg = data.get_weekly_data(data.messages_per_day)
+            if weekly_agg:
+                sorted_weeks = sorted(weekly_agg.keys())
+                week_dates = [dt.fromisoformat(w) for w in sorted_weeks]
+                week_counts = [weekly_agg[w] / 7 for w in sorted_weeks]
+                plt.plot(week_dates, week_counts, linewidth=3, alpha=0.8, label="Weekly avg")
             plt.plot(
                 df["date"],
                 df["messages"],
@@ -842,8 +845,8 @@ class MessageGraphGenerator:
             counts = [counts[i] for i in sorted_indices]
             percentages = [percentages[i] for i in sorted_indices]
 
-            # Keep top 5 channels, collapse the rest into "Others"
-            max_channels = 5
+            # Keep top 9 channels, collapse the rest into "Others"
+            max_channels = 9
             if len(channels) > max_channels:
                 others_count = sum(counts[max_channels:])
                 others_pct = sum(percentages[max_channels:])
