@@ -107,8 +107,8 @@ def cli():
 )
 @click.option(
     "--history-offset/--no-history-offset",
-    default=True,
-    help="Seed cumulative graphs from pre-period message counts (default: on; adds an extra fetch pass)",
+    default=False,
+    help="Generate cumulative graphs seeded from pre-period message counts (adds an extra fetch pass)",
 )
 @click.option("--debug/--no-debug", default=False, help="Enable debug logging")
 def stats(
@@ -174,7 +174,7 @@ def stats(
             # Generate graphs
             graph_generator = MessageGraphGenerator()
             generated_files = graph_generator.generate_all_graphs(
-                stats_data, graph_output_dir, "discord_stats", smooth=smooth
+                stats_data, graph_output_dir, "discord_stats", smooth=smooth, history_offset=history_offset
             )
 
             if generated_files:

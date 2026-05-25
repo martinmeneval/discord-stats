@@ -14,7 +14,7 @@ async def fetch_statistics(
     guild_id: int,
     start_date: datetime,
     end_date: datetime,
-    history_offset: bool = True,
+    history_offset: bool = False,
 ):
     """
     Fetch statistics data from Discord.
@@ -67,7 +67,7 @@ async def fetch_statistics(
 class StatisticsClient(discord.Client):
     """Discord client for collecting server statistics."""
 
-    def __init__(self, guild_id: int, start_date: datetime, end_date: datetime, history_offset: bool = True):
+    def __init__(self, guild_id: int, start_date: datetime, end_date: datetime, history_offset: bool = False):
         """
         Initialize the statistics client.
 
