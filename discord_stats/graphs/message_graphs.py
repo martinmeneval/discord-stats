@@ -111,6 +111,7 @@ class MessageGraphGenerator:
         output_dir: str = ".",
         prefix: str = "discord_stats",
         smooth: bool = True,
+        history_offset: bool = False,
     ) -> list[str]:
         """
         Generate all available graphs and save them to files.
@@ -120,6 +121,8 @@ class MessageGraphGenerator:
             output_dir: Directory to save graphs
             prefix: Prefix for graph filenames
             smooth: Whether to apply smoothing to line graphs (default: True)
+            history_offset: Whether to generate cumulative over-time graphs seeded
+                from pre-period counts (default: False)
 
         Returns:
             List of generated file paths
@@ -137,29 +140,53 @@ class MessageGraphGenerator:
             if file_path:
                 generated_files.append(file_path)
 
-            # Generate top authors over time graph
-            file_path = self.generate_top_authors_over_time_graph(
+            # Cumulative over-time graphs — only when pre-period data was collected
+            if history_offset:
+                file_path = self.generate_top_authors_over_time_graph(
+                    data,
+                    str(output_path / f"{prefix}_top_authors_over_time.png"),
+                    smooth=False,
+                )
+                if file_path:
+                    generated_files.append(file_path)
+
+                file_path = self.generate_top_channels_over_time_graph(
+                    data,
+                    str(output_path / f"{prefix}_top_channels_over_time.png"),
+                    smooth=False,
+                )
+                if file_path:
+                    generated_files.append(file_path)
+
+                file_path = self.generate_top_reactions_over_time_graph(
+                    data,
+                    str(output_path / f"{prefix}_top_reactions_over_time.png"),
+                    smooth=False,
+                )
+                if file_path:
+                    generated_files.append(file_path)
+
+            # Weekly line graphs (always generated)
+            file_path = self.generate_top_authors_per_week_graph(
                 data,
-                str(output_path / f"{prefix}_top_authors_over_time.png"),
-                smooth=False,
+                str(output_path / f"{prefix}_top_authors_per_week.png"),
+                smooth=smooth,
             )
             if file_path:
                 generated_files.append(file_path)
 
-            # Generate top channels over time graph
-            file_path = self.generate_top_channels_over_time_graph(
+            file_path = self.generate_top_channels_per_week_graph(
                 data,
-                str(output_path / f"{prefix}_top_channels_over_time.png"),
-                smooth=False,
+                str(output_path / f"{prefix}_top_channels_per_week.png"),
+                smooth=smooth,
             )
             if file_path:
                 generated_files.append(file_path)
 
-            # Generate top reactions over time graph
-            file_path = self.generate_top_reactions_over_time_graph(
+            file_path = self.generate_top_reactions_per_week_graph(
                 data,
-                str(output_path / f"{prefix}_top_reactions_over_time.png"),
-                smooth=False,
+                str(output_path / f"{prefix}_top_reactions_per_week.png"),
+                smooth=smooth,
             )
             if file_path:
                 generated_files.append(file_path)
@@ -914,3 +941,204 @@ class MessageGraphGenerator:
         else:
             plt.show()
             return None
+
+    def generate_top_authors_per_week_graph(
+        self,
+        data: MessageStatisticsData,
+        output_path: Optional[str] = None,
+        top_n: int = 10,
+        smooth: bool = True,
+    ) -> Optional[str]:
+        """
+        Generate a line graph showing messages per week for the top authors.
+
+        Args:
+            data: Message statistics data
+            output_path: Path to save the graph (optional)
+            top_n: Number of top authors to display
+            smooth: Whether to apply smoothing to the lines (default: True)
+
+        Returns:
+            Path to saved file or None if not saved
+        """
+        top_authors_data = data.get_top_authors_with_daily_data(top_n)
+        if not top_authors_data or not data.start_date or not data.end_date:
+            logger.warning("Insufficient data for top authors per week graph")
+            return None
+
+        plt.figure(figsize=(14, 8))
+
+        for author_name, total_count, daily_data in top_authors_data:
+            weekly_data = data.get_weekly_data(daily_data)
+            if not weekly_data:
+                continue
+
+            sorted_weeks = sorted(weekly_data.keys())
+            dates = [dt.fromisoformat(w) for w in sorted_weeks]
+            counts = [weekly_data[w] for w in sorted_weeks]
+
+            display_name = data.messages_per_author_username.get(author_name, author_name)
+            label = f"{display_name} ({total_count} total)"
+
+            if smooth and len(dates) > 2:
+                x_smooth, y_smooth = self._smooth_data(dates, counts, smoothing_factor=1.0)
+                plt.plot(x_smooth, y_smooth, linewidth=3, alpha=0.8, label=label)
+            else:
+                plt.plot(dates, counts, marker="o", linewidth=2, markersize=4, label=label)
+
+        plt.title(f"Top {top_n} Authors - Messages Per Week", fontsize=16, fontweight="bold")
+        plt.xlabel("Week", fontsize=12)
+        plt.ylabel("Messages Per Week", fontsize=12)
+        plt.legend(loc="upper left", frameon=True, framealpha=0.9)
+        plt.grid(True, alpha=0.3)
+
+        ax = plt.gca()
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+
+        if output_path:
+            plt.savefig(output_path, dpi=300, bbox_inches="tight")
+            logger.info(f"Top authors per week graph saved to {output_path}")
+            plt.close()
+            return output_path
+        else:
+            plt.show()
+            return None
+
+    def generate_top_channels_per_week_graph(
+        self,
+        data: MessageStatisticsData,
+        output_path: Optional[str] = None,
+        top_n: int = 10,
+        smooth: bool = True,
+    ) -> Optional[str]:
+        """
+        Generate a line graph showing messages per week for the top channels.
+
+        Args:
+            data: Message statistics data
+            output_path: Path to save the graph (optional)
+            top_n: Number of top channels to display
+            smooth: Whether to apply smoothing to the lines (default: True)
+
+        Returns:
+            Path to saved file or None if not saved
+        """
+        top_channels_data = data.get_top_channels_with_daily_data(top_n)
+        if not top_channels_data or not data.start_date or not data.end_date:
+            logger.warning("Insufficient data for top channels per week graph")
+            return None
+
+        plt.figure(figsize=(12, 8))
+
+        for channel_name, total_count, daily_data in top_channels_data:
+            weekly_data = data.get_weekly_data(daily_data)
+            if not weekly_data:
+                continue
+
+            sorted_weeks = sorted(weekly_data.keys())
+            dates = [dt.fromisoformat(w) for w in sorted_weeks]
+            counts = [weekly_data[w] for w in sorted_weeks]
+
+            display_name = channel_name.replace("#", "")
+            label = f"{display_name} ({total_count} total)"
+
+            if smooth and len(dates) > 2:
+                x_smooth, y_smooth = self._smooth_data(dates, counts, smoothing_factor=1.0)
+                plt.plot(x_smooth, y_smooth, linewidth=3, alpha=0.8, label=label)
+            else:
+                plt.plot(dates, counts, marker="o", linewidth=2, markersize=4, label=label)
+
+        plt.title(f"Top {top_n} Channels - Messages Per Week", fontsize=16, fontweight="bold")
+        plt.xlabel("Week", fontsize=12)
+        plt.ylabel("Messages Per Week", fontsize=12)
+        plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        plt.grid(True, alpha=0.3)
+
+        ax = plt.gca()
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+
+        if output_path:
+            plt.savefig(output_path, dpi=300, bbox_inches="tight")
+            logger.info(f"Top channels per week graph saved to {output_path}")
+            plt.close()
+            return output_path
+        else:
+            plt.show()
+            return None
+
+    def generate_top_reactions_per_week_graph(
+        self,
+        data: MessageStatisticsData,
+        output_path: Optional[str] = None,
+        top_n: int = 10,
+        smooth: bool = True,
+    ) -> Optional[str]:
+        """
+        Generate a line graph showing reaction usage per week for the top reactions.
+
+        Args:
+            data: Message statistics data
+            output_path: Path to save the graph (optional)
+            top_n: Number of top reactions to display
+            smooth: Whether to apply smoothing to the lines (default: True)
+
+        Returns:
+            Path to saved file or None if not saved
+        """
+        top_reactions_data = data.get_top_reactions_with_daily_data(top_n)
+        if not top_reactions_data or not data.start_date or not data.end_date:
+            logger.warning("Insufficient data for top reactions per week graph")
+            return None
+
+        plt.figure(figsize=(14, 8))
+
+        for emoji, total_count, daily_data in top_reactions_data:
+            weekly_data = data.get_weekly_data(daily_data)
+            if not weekly_data:
+                continue
+
+            sorted_weeks = sorted(weekly_data.keys())
+            dates = [dt.fromisoformat(w) for w in sorted_weeks]
+            counts = [weekly_data[w] for w in sorted_weeks]
+
+            display_name = self._emoji_display_name(emoji)
+            label = f"{display_name} ({total_count})"
+
+            if smooth and len(dates) > 2:
+                x_smooth, y_smooth = self._smooth_data(dates, counts, smoothing_factor=1.0)
+                plt.plot(x_smooth, y_smooth, linewidth=3, alpha=0.8, label=label)
+            else:
+                plt.plot(dates, counts, marker="o", linewidth=2, markersize=4, label=label)
+
+        plt.title(f"Top {top_n} Reactions - Usage Per Week", fontsize=16, fontweight="bold")
+        plt.xlabel("Week", fontsize=12)
+        plt.ylabel("Reactions Per Week", fontsize=12)
+        plt.legend(
+            bbox_to_anchor=(1.02, 1),
+            loc="upper left",
+            fontsize=9,
+            framealpha=0.9,
+        )
+        plt.grid(True, alpha=0.3)
+
+        ax = plt.gca()
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+
+        if output_path:
+            plt.savefig(output_path, dpi=300, bbox_inches="tight")
+            logger.info(f"Top reactions per week graph saved to {output_path}")
+            plt.close()
+            return output_path
+        else:
+            plt.show()
+            return None
+

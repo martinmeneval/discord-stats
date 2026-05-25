@@ -165,6 +165,25 @@ class MessageStatisticsData:
 
         return dates
 
+    @staticmethod
+    def get_weekly_data(daily_data: dict[str, int]) -> dict[str, int]:
+        """
+        Aggregate daily message counts into weekly buckets (Monday-aligned).
+
+        Args:
+            daily_data: Mapping of ISO date strings to counts
+
+        Returns:
+            Mapping of ISO week-start date strings (Monday) to aggregated counts
+        """
+        weekly: dict[str, int] = {}
+        for date_str, count in daily_data.items():
+            d = datetime.fromisoformat(date_str).date()
+            week_start = d - timedelta(days=d.weekday())
+            week_key = week_start.isoformat()
+            weekly[week_key] = weekly.get(week_key, 0) + count
+        return weekly
+
     def get_top_channels_with_daily_data(
         self, limit: int = 5
     ) -> list[tuple[str, int, dict[str, int]]]:
