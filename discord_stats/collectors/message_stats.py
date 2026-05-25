@@ -298,7 +298,7 @@ class MessageStatisticsCollector:
         start_date: datetime,
         end_date: datetime,
         concurrency: int = 10,
-        history_offset: bool = True,
+        history_offset: bool = False,
     ) -> MessageStatisticsData:
         """
         Collect message statistics from the guild between the given dates.
@@ -491,7 +491,7 @@ class MessageStatisticsCollector:
     ) -> None:
         """Process a single message and update statistics."""
         # Skip bot messages
-        if not hasattr(message.author, "bot") or message.author.bot:
+        if getattr(message.author, "bot", False):
             return
 
         # Get author name (with fallback)

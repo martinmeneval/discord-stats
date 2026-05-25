@@ -130,108 +130,70 @@ class MessageGraphGenerator:
         output_path = Path(output_dir)
         output_path.mkdir(exist_ok=True)
 
-        generated_files = []
+        generated_files: list[str] = []
 
-        try:
-            # Generate messages per day graph
-            file_path = self.generate_messages_per_day_graph(
-                data, str(output_path / f"{prefix}_messages_per_day.png"), smooth=smooth
+        def _try_generate(func, *args, **kwargs) -> None:
+            try:
+                result = func(*args, **kwargs)
+                if result:
+                    generated_files.append(result)
+            except Exception as exc:
+                logger.error(f"Error generating {func.__name__}: {exc}")
+
+        _try_generate(
+            self.generate_messages_per_day_graph,
+            data, str(output_path / f"{prefix}_messages_per_day.png"), smooth=smooth,
+        )
+
+        # Cumulative over-time graphs — only when pre-period data was collected
+        if history_offset:
+            _try_generate(
+                self.generate_top_authors_over_time_graph,
+                data, str(output_path / f"{prefix}_top_authors_over_time.png"), smooth=False,
             )
-            if file_path:
-                generated_files.append(file_path)
-
-            # Cumulative over-time graphs — only when pre-period data was collected
-            if history_offset:
-                file_path = self.generate_top_authors_over_time_graph(
-                    data,
-                    str(output_path / f"{prefix}_top_authors_over_time.png"),
-                    smooth=False,
-                )
-                if file_path:
-                    generated_files.append(file_path)
-
-                file_path = self.generate_top_channels_over_time_graph(
-                    data,
-                    str(output_path / f"{prefix}_top_channels_over_time.png"),
-                    smooth=False,
-                )
-                if file_path:
-                    generated_files.append(file_path)
-
-                file_path = self.generate_top_reactions_over_time_graph(
-                    data,
-                    str(output_path / f"{prefix}_top_reactions_over_time.png"),
-                    smooth=False,
-                )
-                if file_path:
-                    generated_files.append(file_path)
-
-            # Weekly line graphs (always generated)
-            file_path = self.generate_top_authors_per_week_graph(
-                data,
-                str(output_path / f"{prefix}_top_authors_per_week.png"),
-                smooth=smooth,
+            _try_generate(
+                self.generate_top_channels_over_time_graph,
+                data, str(output_path / f"{prefix}_top_channels_over_time.png"), smooth=False,
             )
-            if file_path:
-                generated_files.append(file_path)
-
-            file_path = self.generate_top_channels_per_week_graph(
-                data,
-                str(output_path / f"{prefix}_top_channels_per_week.png"),
-                smooth=smooth,
+            _try_generate(
+                self.generate_top_reactions_over_time_graph,
+                data, str(output_path / f"{prefix}_top_reactions_over_time.png"), smooth=False,
             )
-            if file_path:
-                generated_files.append(file_path)
 
-            file_path = self.generate_top_reactions_per_week_graph(
-                data,
-                str(output_path / f"{prefix}_top_reactions_per_week.png"),
-                smooth=smooth,
-            )
-            if file_path:
-                generated_files.append(file_path)
+        # Weekly line graphs (always generated)
+        _try_generate(
+            self.generate_top_authors_per_week_graph,
+            data, str(output_path / f"{prefix}_top_authors_per_week.png"), smooth=smooth,
+        )
+        _try_generate(
+            self.generate_top_channels_per_week_graph,
+            data, str(output_path / f"{prefix}_top_channels_per_week.png"), smooth=smooth,
+        )
+        _try_generate(
+            self.generate_top_reactions_per_week_graph,
+            data, str(output_path / f"{prefix}_top_reactions_per_week.png"), smooth=smooth,
+        )
 
-            # Generate top authors channel distribution pie charts
-            file_path = self.generate_top_authors_channel_distribution_pies(
-                data,
-                str(output_path / f"{prefix}_top_authors_channel_distribution.png"),
-                top_n=9,
-            )
-            if file_path:
-                generated_files.append(file_path)
-
-            # Generate daily activity heatmap
-            file_path = self.generate_daily_activity_heatmap(
-                data, str(output_path / f"{prefix}_daily_activity_heatmap.png")
-            )
-            if file_path:
-                generated_files.append(file_path)
-
-            # Generate top threads bar chart
-            file_path = self.generate_top_threads_bar_chart(
-                data, str(output_path / f"{prefix}_top_threads.png")
-            )
-            if file_path:
-                generated_files.append(file_path)
-
-            # Generate author share stacked area (weekly)
-            file_path = self.generate_author_share_over_time_graph(
-                data,
-                str(output_path / f"{prefix}_author_share_over_time.png"),
-                smooth=smooth,
-            )
-            if file_path:
-                generated_files.append(file_path)
-
-            # Generate channel x day-of-week heatmap
-            file_path = self.generate_channel_weekday_heatmap(
-                data, str(output_path / f"{prefix}_channel_weekday_heatmap.png")
-            )
-            if file_path:
-                generated_files.append(file_path)
-
-        except Exception as e:
-            logger.error(f"Error generating graphs: {e}")
+        _try_generate(
+            self.generate_top_authors_channel_distribution_pies,
+            data, str(output_path / f"{prefix}_top_authors_channel_distribution.png"), top_n=9,
+        )
+        _try_generate(
+            self.generate_daily_activity_heatmap,
+            data, str(output_path / f"{prefix}_daily_activity_heatmap.png"),
+        )
+        _try_generate(
+            self.generate_top_threads_bar_chart,
+            data, str(output_path / f"{prefix}_top_threads.png"),
+        )
+        _try_generate(
+            self.generate_author_share_over_time_graph,
+            data, str(output_path / f"{prefix}_author_share_over_time.png"), smooth=smooth,
+        )
+        _try_generate(
+            self.generate_channel_weekday_heatmap,
+            data, str(output_path / f"{prefix}_channel_weekday_heatmap.png"),
+        )
 
         return generated_files
 
@@ -807,8 +769,6 @@ class MessageGraphGenerator:
         Returns:
             Dictionary mapping channel names to color tuples
         """
-        import colorsys
-
         # Use these distinct starting hues for the most popular channels
         # We start with these to avoid having too many similar colors for top channels
         distinct_hues = [

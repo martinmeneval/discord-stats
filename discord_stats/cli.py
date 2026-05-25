@@ -206,9 +206,14 @@ def stats(
     default=True,
     help="Apply smoothing to line graphs (default: on)",
 )
+@click.option(
+    "--history-offset/--no-history-offset",
+    default=False,
+    help="Generate cumulative graphs seeded from pre-period message counts (adds an extra fetch pass)",
+)
 @click.option("--debug/--no-debug", default=False, help="Enable debug logging")
 def graphs(
-    config, token, guild_id, start_date, end_date, output_dir, prefix, smooth, debug
+    config, token, guild_id, start_date, end_date, output_dir, prefix, smooth, history_offset, debug
 ):
     """Generate graphs from Discord server statistics."""
     log_level = logging.DEBUG if debug else logging.INFO
@@ -230,7 +235,7 @@ def graphs(
     )
 
     try:
-        stats_data = asyncio.run(fetch_statistics(token, guild_id, start, end))
+        stats_data = asyncio.run(fetch_statistics(token, guild_id, start, end, history_offset=history_offset))
 
         if not stats_data:
             logging.error("Failed to fetch statistics data")
@@ -239,7 +244,7 @@ def graphs(
         # Generate graphs
         graph_generator = MessageGraphGenerator()
         generated_files = graph_generator.generate_all_graphs(
-            stats_data, output_dir, prefix, smooth=smooth
+            stats_data, output_dir, prefix, smooth=smooth, history_offset=history_offset
         )
 
         if generated_files:
