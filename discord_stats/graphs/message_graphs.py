@@ -221,10 +221,11 @@ class MessageGraphGenerator:
         plt.grid(True, alpha=0.3)
 
         ax = plt.gca()
-        ax.set_yscale("function", functions=(
-            lambda x: np.sqrt(np.maximum(x, 0)),
-            np.square,
-        ))
+        if cumulative:
+            ax.set_yscale("function", functions=(
+                lambda x: np.sqrt(np.maximum(x, 0)),
+                np.square,
+            ))
         self._format_date_axis(ax, len(all_dates), use_auto=weekly)
 
         return self._save_or_show(output_path, log_msg)
