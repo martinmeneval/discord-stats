@@ -237,6 +237,15 @@ class MessageGraphGenerator:
             lambda x: np.sqrt(np.maximum(x, 0)),
             np.square,
         ))
+        # Place y-ticks at visually even intervals under the sqrt transform
+        y_min, y_max = ax.get_ylim()
+        y_max = max(y_max, 1)
+        n_ticks = 8
+        sqrt_ticks = np.linspace(0, np.sqrt(y_max), n_ticks)
+        tick_values = np.round(sqrt_ticks ** 2).astype(int)
+        tick_values = sorted(set(tick_values))
+        ax.set_yticks(tick_values)
+        ax.set_yticklabels([str(v) for v in tick_values])
         self._format_date_axis(ax, len(all_dates), use_auto=weekly)
 
         return self._save_or_show(output_path, log_msg)
