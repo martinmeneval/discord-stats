@@ -3,6 +3,7 @@
 import colorsys
 import logging
 import unicodedata
+from collections.abc import Callable
 from datetime import datetime as dt
 from pathlib import Path
 from typing import Literal, Optional
@@ -12,6 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from matplotlib.axes import Axes
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d
 
@@ -47,6 +49,40 @@ class MessageGraphGenerator:
             "DejaVu Sans",        # matplotlib default (limited CJK)
         ]
         plt.rcParams["axes.unicode_minus"] = False
+
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _save_or_show(output_path: Optional[str], log_msg: str) -> Optional[str]:
+        """Save the current figure to *output_path* or show interactively."""
+        plt.tight_layout()
+        if output_path:
+            plt.savefig(output_path, dpi=300, bbox_inches="tight")
+            logger.info(f"{log_msg} saved to {output_path}")
+            plt.close()
+            return output_path
+        else:
+            plt.show()
+            return None
+
+    @staticmethod
+    def _format_date_axis(
+        ax: Axes,
+        n_dates: int,
+        *,
+        use_auto: bool = False,
+    ) -> None:
+        """Apply common date-axis formatting to *ax*."""
+        if use_auto:
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        else:
+            ax.xaxis.set_major_locator(
+                mdates.DayLocator(interval=max(1, n_dates // 10))
+            )
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
+        plt.xticks(rotation=45)
 
     def _smooth_data(
         self, x_data: list, y_data: list, smoothing_factor: float = 1.0
@@ -104,6 +140,239 @@ class MessageGraphGenerator:
         except Exception as e:
             logger.debug(f"Error smoothing data: {e}, returning original data")
             return x_data, y_data
+
+    def _generate_multi_series_line_graph(
+        self,
+        items: list[tuple[str, int, dict[str, int]]],
+        data: MessageStatisticsData,
+        *,
+        title: str,
+        ylabel: str,
+        log_msg: str,
+        output_path: Optional[str] = None,
+        smooth: bool = True,
+        weekly: bool = False,
+        cumulative: bool = False,
+        display_name_fn: Callable[[str], str] | None = None,
+        pre_period_fn: Callable[[str], int] | None = None,
+        figsize: tuple[int, int] = (14, 8),
+        legend_kwargs: dict | None = None,
+    ) -> Optional[str]:
+        """
+        Shared implementation for multi-series line graphs (cumulative and weekly).
+
+        Args:
+            items: List of (name, total_count, daily_data) tuples.
+            data: The statistics data object (used for date range).
+            title: Graph title.
+            ylabel: Y-axis label.
+            log_msg: Prefix for the log message on save.
+            output_path: Path to save the graph (optional).
+            smooth: Whether to apply smoothing.
+            weekly: Aggregate daily data into weekly buckets.
+            cumulative: Plot cumulative sums instead of raw counts.
+            display_name_fn: Maps item name → display label (default: identity).
+            pre_period_fn: Maps item name → pre-period offset for cumulative graphs.
+            figsize: Figure size.
+            legend_kwargs: Extra kwargs passed to plt.legend().
+        """
+        if not items or not data.start_date or not data.end_date:
+            logger.warning(f"Insufficient data for {log_msg}")
+            return None
+
+        all_dates = data.get_all_dates_in_range()
+        plt.figure(figsize=figsize)
+
+        for name, total_count, daily_data in items:
+            if weekly:
+                agg = data.get_weekly_data(daily_data)
+                if not agg:
+                    continue
+                sorted_keys = sorted(agg.keys())
+                dates = [dt.fromisoformat(k) for k in sorted_keys]
+                counts = [agg[k] for k in sorted_keys]
+            else:
+                dates = [dt.fromisoformat(d) for d in all_dates]
+                counts = [daily_data.get(d, 0) for d in all_dates]
+
+            if cumulative:
+                offset = pre_period_fn(name) if pre_period_fn else 0
+                running = offset
+                cum: list[int] = []
+                for c in counts:
+                    running += c
+                    cum.append(running)
+                counts = cum
+
+            display = display_name_fn(name) if display_name_fn else name
+            label = f"{display} ({total_count} total)" if not cumulative else f"{display} ({total_count} total)"
+
+            if smooth and len(dates) > 2:
+                sigma = 1.0 if weekly else 1.5
+                x_s, y_s = self._smooth_data(dates, counts, smoothing_factor=sigma)
+                plt.plot(x_s, y_s, linewidth=3, alpha=0.8, label=label)
+            else:
+                if cumulative and not weekly:
+                    plt.plot(
+                        mdates.date2num(dates), counts,
+                        marker="o", linewidth=2, markersize=3, label=label,
+                    )
+                else:
+                    plt.plot(
+                        dates, counts,
+                        marker="o", linewidth=2, markersize=4, label=label,
+                    )
+
+        plt.title(title, fontsize=16, fontweight="bold")
+        plt.xlabel("Week" if weekly else "Date", fontsize=12)
+        plt.ylabel(ylabel, fontsize=12)
+        lkw = legend_kwargs or {}
+        plt.legend(**{"loc": "upper left", "frameon": True, "framealpha": 0.9, **lkw})
+        plt.grid(True, alpha=0.3)
+
+        ax = plt.gca()
+        self._format_date_axis(ax, len(all_dates), use_auto=weekly)
+
+        return self._save_or_show(output_path, log_msg)
+
+    # ------------------------------------------------------------------
+    # Colour helpers
+    # ------------------------------------------------------------------
+
+    # Earthy base colours (H 0-1, L 0-1, S 0-1) used for per-pie palettes
+    _PIE_BASE_COLORS: list[tuple[float, float, float]] = [
+        (15 / 360, 0.52, 0.48),   # Terracotta
+        (140 / 360, 0.48, 0.28),  # Sage
+        (258 / 360, 0.62, 0.38),  # Lavender
+        (345 / 360, 0.62, 0.32),  # Dusty rose
+        (215 / 360, 0.50, 0.34),  # Slate blue
+        (38 / 360, 0.58, 0.52),   # Amber
+        (180 / 360, 0.46, 0.32),  # Teal
+        (300 / 360, 0.58, 0.22),  # Mauve
+        (200 / 360, 0.52, 0.28),  # Steel
+    ]
+
+    def _get_pie_colors(
+        self, chart_index: int, channels: list[str]
+    ) -> list[tuple[float, float, float]]:
+        """
+        Generate per-pie slice colours from the earthy base palette.
+
+        The first slice (largest) uses the base lightness; each subsequent main
+        slice is lightened by 0.065.  The "Others" slice is desaturated to a
+        near-grey.
+        """
+        h, l_base, s_base = self._PIE_BASE_COLORS[chart_index % len(self._PIE_BASE_COLORS)]
+        colors: list[tuple[float, float, float]] = []
+        main_idx = 0
+        for ch in channels:
+            if ch == "Others":
+                colors.append(colorsys.hls_to_rgb(h, 0.80, 0.10))
+            else:
+                l = min(l_base + main_idx * 0.065, 0.84)
+                colors.append(colorsys.hls_to_rgb(h, l, s_base))
+                main_idx += 1
+        return colors
+
+    @staticmethod
+    def _emoji_display_name(emoji_str: str) -> str:
+        """
+        Return a human-readable display name for an emoji without rendering
+        the glyph character (avoids 'missing from font' warnings).
+
+        Custom Discord emoji  →  'emoji_name'
+        Unicode emoji         →  full Unicode name, title-cased
+        """
+        if emoji_str.startswith("<") and ":" in emoji_str:
+            # '<:name:123>' or '<a:name:123>'
+            parts = emoji_str.strip("<>").split(":")
+            name = parts[1] if len(parts) >= 2 else emoji_str
+            return name.replace("_", " ")
+
+        try:
+            # Find first non-ASCII char (skip variation selectors)
+            char = next(c for c in emoji_str if ord(c) > 0xFF)
+            return unicodedata.name(char).title()
+        except (StopIteration, ValueError):
+            return emoji_str[:15]
+
+    def _generate_channel_color_map(
+        self, all_channel_names: list[str], data: Optional[MessageStatisticsData] = None
+    ) -> dict[str, tuple[float, ...]]:
+        """
+        Generate a consistent color mapping for channels, prioritizing most popular channels.
+
+        Args:
+            all_channel_names: List of all unique channel names to assign colors to
+            data: Message statistics data to determine channel popularity
+
+        Returns:
+            Dictionary mapping channel names to color tuples
+        """
+        # Use these distinct starting hues for the most popular channels
+        # We start with these to avoid having too many similar colors for top channels
+        distinct_hues = [
+            0.0,
+            0.1,
+            0.58,
+            0.35,
+            0.7,
+            0.9,
+            0.2,
+            0.45,
+            0.8,
+            0.55,
+        ]  # red, orange, blue, green, purple, etc.
+
+        colors = {}
+
+        # If we have data, sort channels by popularity
+        if data:
+            # Sort channels by message count (popularity)
+            channel_counts = {}
+            for channel in all_channel_names:
+                count = data.messages_per_channel.get(channel, 0)
+                channel_counts[channel] = count
+
+            # Sort channels by count (descending)
+            sorted_channels = sorted(
+                channel_counts.items(), key=lambda x: x[1], reverse=True
+            )
+            sorted_channel_names = [channel for channel, _ in sorted_channels]
+
+            # Assign distinct hues to the most popular channels
+            for i, channel in enumerate(sorted_channel_names):
+                if i < len(distinct_hues):
+                    # Use predefined distinct hues for top channels
+                    hue = distinct_hues[i]
+                else:
+                    # For remaining channels, distribute evenly in HSV space
+                    hue = (
+                        (i - len(distinct_hues))
+                        / (len(sorted_channel_names) - len(distinct_hues))
+                        if len(sorted_channel_names) > len(distinct_hues)
+                        else 0
+                    )
+
+                # Create slightly different saturations and values for visual interest
+                sat = 0.8 + (i % 3) * 0.05  # Slight variation in saturation
+                val = 0.9 - (i % 3) * 0.05  # Slight variation in value
+
+                rgb = colorsys.hsv_to_rgb(hue, sat, val)
+                colors[channel] = rgb
+        else:
+            # If no data, just distribute colors evenly
+            num_channels = len(all_channel_names)
+            for i, channel in enumerate(sorted(all_channel_names)):
+                hue = i / num_channels
+                rgb = colorsys.hsv_to_rgb(hue, 0.8, 0.9)
+                colors[channel] = rgb
+
+        return colors
+
+    # ------------------------------------------------------------------
+    # Orchestration
+    # ------------------------------------------------------------------
 
     def generate_all_graphs(
         self,
@@ -197,6 +466,10 @@ class MessageGraphGenerator:
 
         return generated_files
 
+    # ------------------------------------------------------------------
+    # Individual graph methods
+    # ------------------------------------------------------------------
+
     def generate_messages_per_day_graph(
         self,
         data: MessageStatisticsData,
@@ -258,11 +531,7 @@ class MessageGraphGenerator:
 
         # Format x-axis
         ax = plt.gca()
-        ax.xaxis.set_major_locator(
-            mdates.DayLocator(interval=max(1, len(all_dates) // 10))
-        )
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
-        plt.xticks(rotation=45)
+        self._format_date_axis(ax, len(all_dates))
 
         # Add some statistics as text
         avg_messages = df["messages"].mean()
@@ -277,16 +546,30 @@ class MessageGraphGenerator:
             bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
         )
 
-        plt.tight_layout()
+        return self._save_or_show(output_path, "Messages per day graph")
 
-        if output_path:
-            plt.savefig(output_path, dpi=300, bbox_inches="tight")
-            logger.info(f"Messages per day graph saved to {output_path}")
-            plt.close()
-            return output_path
-        else:
-            plt.show()
-            return None
+    # -- Cumulative over-time graphs (thin wrappers) -------------------
+
+    def generate_top_authors_over_time_graph(
+        self,
+        data: MessageStatisticsData,
+        output_path: Optional[str] = None,
+        top_n: int = 10,
+        smooth: bool = True,
+    ) -> Optional[str]:
+        """Generate a cumulative line graph for the top authors over time."""
+        return self._generate_multi_series_line_graph(
+            data.get_top_authors_with_daily_data(top_n),
+            data,
+            title=f"Top {top_n} Authors - Cumulative Messages Over Time",
+            ylabel="Cumulative Message Count",
+            log_msg="Top authors cumulative graph",
+            output_path=output_path,
+            smooth=smooth,
+            cumulative=True,
+            display_name_fn=lambda n: data.messages_per_author_username.get(n, n),
+            pre_period_fn=lambda n: data.pre_period_messages_per_author.get(n, 0),
+        )
 
     def generate_top_channels_over_time_graph(
         self,
@@ -295,95 +578,20 @@ class MessageGraphGenerator:
         top_n: int = 10,
         smooth: bool = True,
     ) -> Optional[str]:
-        """
-        Generate a line graph showing cumulative message activity for top channels over time.
-
-        Args:
-            data: Message statistics data
-            output_path: Path to save the graph (optional)
-            top_n: Number of top channels to display
-            smooth: Whether to apply smoothing to the lines (default: True)
-
-        Returns:
-            Path to saved file or None if not saved
-        """
-        top_channels_data = data.get_top_channels_with_daily_data(top_n)
-        if not top_channels_data or not data.start_date or not data.end_date:
-            logger.warning("Insufficient data for top channels over time graph")
-            return None
-
-        all_dates = data.get_all_dates_in_range()
-
-        # Create the plot
-        plt.figure(figsize=(12, 8))
-
-        # Plot each channel with cumulative data
-        for channel_name, total_count, daily_data in top_channels_data:
-            # Create series with zeros for missing dates
-            daily_counts = [daily_data.get(date_str, 0) for date_str in all_dates]
-            dates = [dt.fromisoformat(date_str) for date_str in all_dates]
-
-            # Calculate cumulative counts, seeded from pre-period history
-            cumulative_counts = []
-            running_total = data.pre_period_messages_per_channel.get(channel_name, 0)
-            for count in daily_counts:
-                running_total += count
-                cumulative_counts.append(running_total)
-
-            # Clean channel name for display
-            display_name = channel_name.replace("#", "")
-
-            # Apply smoothing if requested and we have enough data points
-            if smooth and len(dates) > 2:
-                x_smooth, y_smooth = self._smooth_data(
-                    dates, cumulative_counts, smoothing_factor=1.5
-                )
-                plt.plot(
-                    x_smooth,
-                    y_smooth,
-                    linewidth=3,
-                    label=f"{display_name} ({total_count} total)",
-                    alpha=0.8,
-                )
-            else:
-                plt.plot(
-                    mdates.date2num(dates),
-                    cumulative_counts,
-                    marker="o",
-                    linewidth=2,
-                    markersize=3,
-                    label=f"{display_name} ({total_count} total)",
-                )
-
-        # Formatting
-        plt.title(
-            f"Top {top_n} Channels - Cumulative Messages Over Time",
-            fontsize=16,
-            fontweight="bold",
+        """Generate a cumulative line graph for the top channels over time."""
+        return self._generate_multi_series_line_graph(
+            data.get_top_channels_with_daily_data(top_n),
+            data,
+            title=f"Top {top_n} Channels - Cumulative Messages Over Time",
+            ylabel="Cumulative Message Count",
+            log_msg="Top channels cumulative graph",
+            output_path=output_path,
+            smooth=smooth,
+            cumulative=True,
+            display_name_fn=lambda n: n.replace("#", ""),
+            pre_period_fn=lambda n: data.pre_period_messages_per_channel.get(n, 0),
+            legend_kwargs={"bbox_to_anchor": (1.05, 1), "loc": "upper left"},
         )
-        plt.xlabel("Date", fontsize=12)
-        plt.ylabel("Cumulative Message Count", fontsize=12)
-        plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-        plt.grid(True, alpha=0.3)
-
-        # Format x-axis
-        ax = plt.gca()
-        ax.xaxis.set_major_locator(
-            mdates.DayLocator(interval=max(1, len(all_dates) // 10))
-        )
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
-        plt.xticks(rotation=45)
-
-        plt.tight_layout()
-
-        if output_path:
-            plt.savefig(output_path, dpi=300, bbox_inches="tight")
-            logger.info(f"Top channels cumulative graph saved to {output_path}")
-            plt.close()
-            return output_path
-        else:
-            plt.show()
-            return None
 
     def generate_top_reactions_over_time_graph(
         self,
@@ -392,93 +600,88 @@ class MessageGraphGenerator:
         top_n: int = 10,
         smooth: bool = True,
     ) -> Optional[str]:
-        """
-        Generate a line graph showing cumulative usage of top reactions over time.
-
-        Args:
-            data: Message statistics data
-            output_path: Path to save the graph (optional)
-            top_n: Number of top reactions to display
-            smooth: Whether to apply smoothing to the lines (default: True)
-
-        Returns:
-            Path to saved file or None if not saved
-        """
-        top_reactions_data = data.get_top_reactions_with_daily_data(top_n)
-        if not top_reactions_data or not data.start_date or not data.end_date:
-            logger.warning("Insufficient data for top reactions over time graph")
-            return None
-
-        all_dates = data.get_all_dates_in_range()
-
-        # Create the plot
-        plt.figure(figsize=(14, 8))
-
-        # Plot each reaction with cumulative data
-        for emoji, total_count, daily_data in top_reactions_data:
-            # Create series with zeros for missing dates
-            daily_counts = [daily_data.get(date_str, 0) for date_str in all_dates]
-            dates = [dt.fromisoformat(date_str) for date_str in all_dates]
-
-            # Calculate cumulative counts, seeded from pre-period reactions
-            cumulative_counts = []
-            running_total = data.pre_period_reactions_count.get(emoji, 0)
-            for count in daily_counts:
-                running_total += count
-                cumulative_counts.append(running_total)
-
-            display_name = self._emoji_display_name(emoji)
-            label = f"{display_name} ({total_count})"
-
-            if smooth and len(dates) > 2:
-                x_smooth, y_smooth = self._smooth_data(
-                    dates, cumulative_counts, smoothing_factor=1.5
-                )
-                plt.plot(x_smooth, y_smooth, linewidth=3, alpha=0.8, label=label)
-            else:
-                plt.plot(
-                    mdates.date2num(dates),
-                    cumulative_counts,
-                    marker="o",
-                    linewidth=2,
-                    markersize=3,
-                    label=label,
-                )
-
-        # Formatting
-        plt.title(
-            f"Top {top_n} Reactions - Cumulative Usage Over Time",
-            fontsize=16,
-            fontweight="bold",
+        """Generate a cumulative line graph for the top reactions over time."""
+        return self._generate_multi_series_line_graph(
+            data.get_top_reactions_with_daily_data(top_n),
+            data,
+            title=f"Top {top_n} Reactions - Cumulative Usage Over Time",
+            ylabel="Cumulative Reaction Count",
+            log_msg="Top reactions cumulative graph",
+            output_path=output_path,
+            smooth=smooth,
+            cumulative=True,
+            figsize=(14, 8),
+            display_name_fn=self._emoji_display_name,
+            pre_period_fn=lambda n: data.pre_period_reactions_count.get(n, 0),
+            legend_kwargs={"bbox_to_anchor": (1.02, 1), "loc": "upper left", "fontsize": 9},
         )
-        plt.xlabel("Date", fontsize=12)
-        plt.ylabel("Cumulative Reaction Count", fontsize=12)
-        plt.legend(
-            bbox_to_anchor=(1.02, 1),
-            loc="upper left",
-            fontsize=9,
-            framealpha=0.9,
+
+    # -- Weekly line graphs (thin wrappers) ----------------------------
+
+    def generate_top_authors_per_week_graph(
+        self,
+        data: MessageStatisticsData,
+        output_path: Optional[str] = None,
+        top_n: int = 10,
+        smooth: bool = True,
+    ) -> Optional[str]:
+        """Generate a weekly line graph for the top authors."""
+        return self._generate_multi_series_line_graph(
+            data.get_top_authors_with_daily_data(top_n),
+            data,
+            title=f"Top {top_n} Authors - Messages Per Week",
+            ylabel="Messages Per Week",
+            log_msg="Top authors per week graph",
+            output_path=output_path,
+            smooth=smooth,
+            weekly=True,
+            display_name_fn=lambda n: data.messages_per_author_username.get(n, n),
         )
-        plt.grid(True, alpha=0.3)
 
-        # Format x-axis
-        ax = plt.gca()
-        ax.xaxis.set_major_locator(
-            mdates.DayLocator(interval=max(1, len(all_dates) // 10))
+    def generate_top_channels_per_week_graph(
+        self,
+        data: MessageStatisticsData,
+        output_path: Optional[str] = None,
+        top_n: int = 10,
+        smooth: bool = True,
+    ) -> Optional[str]:
+        """Generate a weekly line graph for the top channels."""
+        return self._generate_multi_series_line_graph(
+            data.get_top_channels_with_daily_data(top_n),
+            data,
+            title=f"Top {top_n} Channels - Messages Per Week",
+            ylabel="Messages Per Week",
+            log_msg="Top channels per week graph",
+            output_path=output_path,
+            smooth=smooth,
+            weekly=True,
+            figsize=(12, 8),
+            display_name_fn=lambda n: n.replace("#", ""),
+            legend_kwargs={"bbox_to_anchor": (1.05, 1), "loc": "upper left"},
         )
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
-        plt.xticks(rotation=45)
 
-        plt.tight_layout()
+    def generate_top_reactions_per_week_graph(
+        self,
+        data: MessageStatisticsData,
+        output_path: Optional[str] = None,
+        top_n: int = 10,
+        smooth: bool = True,
+    ) -> Optional[str]:
+        """Generate a weekly line graph for the top reactions."""
+        return self._generate_multi_series_line_graph(
+            data.get_top_reactions_with_daily_data(top_n),
+            data,
+            title=f"Top {top_n} Reactions - Usage Per Week",
+            ylabel="Reactions Per Week",
+            log_msg="Top reactions per week graph",
+            output_path=output_path,
+            smooth=smooth,
+            weekly=True,
+            display_name_fn=self._emoji_display_name,
+            legend_kwargs={"bbox_to_anchor": (1.02, 1), "loc": "upper left", "fontsize": 9},
+        )
 
-        if output_path:
-            plt.savefig(output_path, dpi=300, bbox_inches="tight")
-            logger.info(f"Top reactions cumulative graph saved to {output_path}")
-            plt.close()
-            return output_path
-        else:
-            plt.show()
-            return None
+    # -- Unique graph types --------------------------------------------
 
     def generate_daily_activity_heatmap(
         self, data: MessageStatisticsData, output_path: Optional[str] = None
@@ -542,16 +745,7 @@ class MessageGraphGenerator:
         plt.xlabel("Week Number", fontsize=12)
         plt.ylabel("Day of Week", fontsize=12)
 
-        plt.tight_layout()
-
-        if output_path:
-            plt.savefig(output_path, dpi=300, bbox_inches="tight")
-            logger.info(f"Daily activity heatmap saved to {output_path}")
-            plt.close()
-            return output_path
-        else:
-            plt.show()
-            return None
+        return self._save_or_show(output_path, "Daily activity heatmap")
 
     def generate_top_authors_channel_distribution_pies(
         self,
@@ -699,432 +893,6 @@ class MessageGraphGenerator:
             plt.show()
             return None
 
-    # Earthy base colours (H 0-1, L 0-1, S 0-1) used for per-pie palettes
-    _PIE_BASE_COLORS: list[tuple[float, float, float]] = [
-        (15 / 360, 0.52, 0.48),   # Terracotta
-        (140 / 360, 0.48, 0.28),  # Sage
-        (258 / 360, 0.62, 0.38),  # Lavender
-        (345 / 360, 0.62, 0.32),  # Dusty rose
-        (215 / 360, 0.50, 0.34),  # Slate blue
-        (38 / 360, 0.58, 0.52),   # Amber
-        (180 / 360, 0.46, 0.32),  # Teal
-        (300 / 360, 0.58, 0.22),  # Mauve
-        (200 / 360, 0.52, 0.28),  # Steel
-    ]
-
-    def _get_pie_colors(
-        self, chart_index: int, channels: list[str]
-    ) -> list[tuple[float, float, float]]:
-        """
-        Generate per-pie slice colours from the earthy base palette.
-
-        The first slice (largest) uses the base lightness; each subsequent main
-        slice is lightened by 0.065.  The "Others" slice is desaturated to a
-        near-grey.
-        """
-        h, l_base, s_base = self._PIE_BASE_COLORS[chart_index % len(self._PIE_BASE_COLORS)]
-        colors: list[tuple[float, float, float]] = []
-        main_idx = 0
-        for ch in channels:
-            if ch == "Others":
-                colors.append(colorsys.hls_to_rgb(h, 0.80, 0.10))
-            else:
-                l = min(l_base + main_idx * 0.065, 0.84)
-                colors.append(colorsys.hls_to_rgb(h, l, s_base))
-                main_idx += 1
-        return colors
-
-    @staticmethod
-    def _emoji_display_name(emoji_str: str) -> str:
-        """
-        Return a human-readable display name for an emoji without rendering
-        the glyph character (avoids 'missing from font' warnings).
-
-        Custom Discord emoji  →  'emoji_name'
-        Unicode emoji         →  full Unicode name, title-cased
-        """
-        if emoji_str.startswith("<") and ":" in emoji_str:
-            # '<:name:123>' or '<a:name:123>'
-            parts = emoji_str.strip("<>").split(":")
-            name = parts[1] if len(parts) >= 2 else emoji_str
-            return name.replace("_", " ")
-
-        try:
-            # Find first non-ASCII char (skip variation selectors)
-            char = next(c for c in emoji_str if ord(c) > 0xFF)
-            return unicodedata.name(char).title()
-        except (StopIteration, ValueError):
-            return emoji_str[:15]
-
-    def _generate_channel_color_map(
-        self, all_channel_names: list[str], data: Optional[MessageStatisticsData] = None
-    ) -> dict[str, tuple[float, ...]]:
-        """
-        Generate a consistent color mapping for channels, prioritizing most popular channels.
-
-        Args:
-            all_channel_names: List of all unique channel names to assign colors to
-            data: Message statistics data to determine channel popularity
-
-        Returns:
-            Dictionary mapping channel names to color tuples
-        """
-        # Use these distinct starting hues for the most popular channels
-        # We start with these to avoid having too many similar colors for top channels
-        distinct_hues = [
-            0.0,
-            0.1,
-            0.58,
-            0.35,
-            0.7,
-            0.9,
-            0.2,
-            0.45,
-            0.8,
-            0.55,
-        ]  # red, orange, blue, green, purple, etc.
-
-        colors = {}
-
-        # If we have data, sort channels by popularity
-        if data:
-            # Sort channels by message count (popularity)
-            channel_counts = {}
-            for channel in all_channel_names:
-                count = data.messages_per_channel.get(channel, 0)
-                channel_counts[channel] = count
-
-            # Sort channels by count (descending)
-            sorted_channels = sorted(
-                channel_counts.items(), key=lambda x: x[1], reverse=True
-            )
-            sorted_channel_names = [channel for channel, _ in sorted_channels]
-
-            # Assign distinct hues to the most popular channels
-            for i, channel in enumerate(sorted_channel_names):
-                if i < len(distinct_hues):
-                    # Use predefined distinct hues for top channels
-                    hue = distinct_hues[i]
-                else:
-                    # For remaining channels, distribute evenly in HSV space
-                    hue = (
-                        (i - len(distinct_hues))
-                        / (len(sorted_channel_names) - len(distinct_hues))
-                        if len(sorted_channel_names) > len(distinct_hues)
-                        else 0
-                    )
-
-                # Create slightly different saturations and values for visual interest
-                sat = 0.8 + (i % 3) * 0.05  # Slight variation in saturation
-                val = 0.9 - (i % 3) * 0.05  # Slight variation in value
-
-                rgb = colorsys.hsv_to_rgb(hue, sat, val)
-                colors[channel] = rgb
-        else:
-            # If no data, just distribute colors evenly
-            num_channels = len(all_channel_names)
-            for i, channel in enumerate(sorted(all_channel_names)):
-                hue = i / num_channels
-                rgb = colorsys.hsv_to_rgb(hue, 0.8, 0.9)
-                colors[channel] = rgb
-
-        return colors
-
-    def generate_top_authors_over_time_graph(
-        self,
-        data: MessageStatisticsData,
-        output_path: Optional[str] = None,
-        top_n: int = 10,
-        smooth: bool = True,
-    ) -> Optional[str]:
-        """
-        Generate a line graph showing cumulative message activity for top authors over time.
-
-        Args:
-            data: Message statistics data
-            output_path: Path to save the graph (optional)
-            top_n: Number of top authors to display (default: 5)
-            smooth: Whether to apply smoothing to the lines (default: True)
-
-        Returns:
-            Path to saved file or None if not saved
-        """
-        top_authors_data = data.get_top_authors_with_daily_data(top_n)
-        if not top_authors_data or not data.start_date or not data.end_date:
-            logger.warning("Insufficient data for top authors over time graph")
-            return None
-
-        all_dates = data.get_all_dates_in_range()
-
-        # Create the plot with adequate size for multiple lines
-        plt.figure(figsize=(14, 8))
-
-        # Plot each author with cumulative data
-        for author_name, total_count, daily_data in top_authors_data:
-            # Create series with zeros for missing dates
-            daily_counts = [daily_data.get(date_str, 0) for date_str in all_dates]
-            dates = [dt.fromisoformat(date_str) for date_str in all_dates]
-
-            # Calculate cumulative counts, seeded from pre-period history
-            cumulative_counts = []
-            running_total = data.pre_period_messages_per_author.get(author_name, 0)
-            for count in daily_counts:
-                running_total += count
-                cumulative_counts.append(running_total)
-
-            if smooth and len(dates) > 2:
-                x_smooth, y_smooth = self._smooth_data(
-                    dates, cumulative_counts, smoothing_factor=1.5
-                )
-                plt.plot(
-                    x_smooth,
-                    y_smooth,
-                    linewidth=3,
-                    label=f"{data.messages_per_author_username.get(author_name, author_name)} ({total_count} total)",
-                    alpha=0.8,
-                )
-            else:
-                # Convert dates to numbers for matplotlib
-                date_nums = mdates.date2num(dates)
-                plt.plot(
-                    date_nums,
-                    cumulative_counts,
-                    marker="o",
-                    linewidth=2,
-                    markersize=3,
-                    label=f"{data.messages_per_author_username.get(author_name, author_name)} ({total_count} total)",
-                )
-
-        # Formatting
-        plt.title(
-            f"Top {top_n} Authors - Cumulative Messages Over Time",
-            fontsize=16,
-            fontweight="bold",
-        )
-        plt.xlabel("Date", fontsize=12)
-        plt.ylabel("Cumulative Message Count", fontsize=12)
-        plt.legend(loc="upper left", frameon=True, framealpha=0.9)
-        plt.grid(True, alpha=0.3)
-
-        # Format x-axis
-        ax = plt.gca()
-        ax.xaxis.set_major_locator(
-            mdates.DayLocator(interval=max(1, len(all_dates) // 10))
-        )
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
-        plt.xticks(rotation=45)
-
-        plt.tight_layout()
-
-        if output_path:
-            plt.savefig(output_path, dpi=300, bbox_inches="tight")
-            logger.info(f"Top authors over time graph saved to {output_path}")
-            plt.close()
-            return output_path
-        else:
-            plt.show()
-            return None
-
-    def generate_top_authors_per_week_graph(
-        self,
-        data: MessageStatisticsData,
-        output_path: Optional[str] = None,
-        top_n: int = 10,
-        smooth: bool = True,
-    ) -> Optional[str]:
-        """
-        Generate a line graph showing messages per week for the top authors.
-
-        Args:
-            data: Message statistics data
-            output_path: Path to save the graph (optional)
-            top_n: Number of top authors to display
-            smooth: Whether to apply smoothing to the lines (default: True)
-
-        Returns:
-            Path to saved file or None if not saved
-        """
-        top_authors_data = data.get_top_authors_with_daily_data(top_n)
-        if not top_authors_data or not data.start_date or not data.end_date:
-            logger.warning("Insufficient data for top authors per week graph")
-            return None
-
-        plt.figure(figsize=(14, 8))
-
-        for author_name, total_count, daily_data in top_authors_data:
-            weekly_data = data.get_weekly_data(daily_data)
-            if not weekly_data:
-                continue
-
-            sorted_weeks = sorted(weekly_data.keys())
-            dates = [dt.fromisoformat(w) for w in sorted_weeks]
-            counts = [weekly_data[w] for w in sorted_weeks]
-
-            display_name = data.messages_per_author_username.get(author_name, author_name)
-            label = f"{display_name} ({total_count} total)"
-
-            if smooth and len(dates) > 2:
-                x_smooth, y_smooth = self._smooth_data(dates, counts, smoothing_factor=1.0)
-                plt.plot(x_smooth, y_smooth, linewidth=3, alpha=0.8, label=label)
-            else:
-                plt.plot(dates, counts, marker="o", linewidth=2, markersize=4, label=label)
-
-        plt.title(f"Top {top_n} Authors - Messages Per Week", fontsize=16, fontweight="bold")
-        plt.xlabel("Week", fontsize=12)
-        plt.ylabel("Messages Per Week", fontsize=12)
-        plt.legend(loc="upper left", frameon=True, framealpha=0.9)
-        plt.grid(True, alpha=0.3)
-
-        ax = plt.gca()
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-
-        if output_path:
-            plt.savefig(output_path, dpi=300, bbox_inches="tight")
-            logger.info(f"Top authors per week graph saved to {output_path}")
-            plt.close()
-            return output_path
-        else:
-            plt.show()
-            return None
-
-    def generate_top_channels_per_week_graph(
-        self,
-        data: MessageStatisticsData,
-        output_path: Optional[str] = None,
-        top_n: int = 10,
-        smooth: bool = True,
-    ) -> Optional[str]:
-        """
-        Generate a line graph showing messages per week for the top channels.
-
-        Args:
-            data: Message statistics data
-            output_path: Path to save the graph (optional)
-            top_n: Number of top channels to display
-            smooth: Whether to apply smoothing to the lines (default: True)
-
-        Returns:
-            Path to saved file or None if not saved
-        """
-        top_channels_data = data.get_top_channels_with_daily_data(top_n)
-        if not top_channels_data or not data.start_date or not data.end_date:
-            logger.warning("Insufficient data for top channels per week graph")
-            return None
-
-        plt.figure(figsize=(12, 8))
-
-        for channel_name, total_count, daily_data in top_channels_data:
-            weekly_data = data.get_weekly_data(daily_data)
-            if not weekly_data:
-                continue
-
-            sorted_weeks = sorted(weekly_data.keys())
-            dates = [dt.fromisoformat(w) for w in sorted_weeks]
-            counts = [weekly_data[w] for w in sorted_weeks]
-
-            display_name = channel_name.replace("#", "")
-            label = f"{display_name} ({total_count} total)"
-
-            if smooth and len(dates) > 2:
-                x_smooth, y_smooth = self._smooth_data(dates, counts, smoothing_factor=1.0)
-                plt.plot(x_smooth, y_smooth, linewidth=3, alpha=0.8, label=label)
-            else:
-                plt.plot(dates, counts, marker="o", linewidth=2, markersize=4, label=label)
-
-        plt.title(f"Top {top_n} Channels - Messages Per Week", fontsize=16, fontweight="bold")
-        plt.xlabel("Week", fontsize=12)
-        plt.ylabel("Messages Per Week", fontsize=12)
-        plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-        plt.grid(True, alpha=0.3)
-
-        ax = plt.gca()
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-
-        if output_path:
-            plt.savefig(output_path, dpi=300, bbox_inches="tight")
-            logger.info(f"Top channels per week graph saved to {output_path}")
-            plt.close()
-            return output_path
-        else:
-            plt.show()
-            return None
-
-    def generate_top_reactions_per_week_graph(
-        self,
-        data: MessageStatisticsData,
-        output_path: Optional[str] = None,
-        top_n: int = 10,
-        smooth: bool = True,
-    ) -> Optional[str]:
-        """
-        Generate a line graph showing reaction usage per week for the top reactions.
-
-        Args:
-            data: Message statistics data
-            output_path: Path to save the graph (optional)
-            top_n: Number of top reactions to display
-            smooth: Whether to apply smoothing to the lines (default: True)
-
-        Returns:
-            Path to saved file or None if not saved
-        """
-        top_reactions_data = data.get_top_reactions_with_daily_data(top_n)
-        if not top_reactions_data or not data.start_date or not data.end_date:
-            logger.warning("Insufficient data for top reactions per week graph")
-            return None
-
-        plt.figure(figsize=(14, 8))
-
-        for emoji, total_count, daily_data in top_reactions_data:
-            weekly_data = data.get_weekly_data(daily_data)
-            if not weekly_data:
-                continue
-
-            sorted_weeks = sorted(weekly_data.keys())
-            dates = [dt.fromisoformat(w) for w in sorted_weeks]
-            counts = [weekly_data[w] for w in sorted_weeks]
-
-            display_name = self._emoji_display_name(emoji)
-            label = f"{display_name} ({total_count})"
-
-            if smooth and len(dates) > 2:
-                x_smooth, y_smooth = self._smooth_data(dates, counts, smoothing_factor=1.0)
-                plt.plot(x_smooth, y_smooth, linewidth=3, alpha=0.8, label=label)
-            else:
-                plt.plot(dates, counts, marker="o", linewidth=2, markersize=4, label=label)
-
-        plt.title(f"Top {top_n} Reactions - Usage Per Week", fontsize=16, fontweight="bold")
-        plt.xlabel("Week", fontsize=12)
-        plt.ylabel("Reactions Per Week", fontsize=12)
-        plt.legend(
-            bbox_to_anchor=(1.02, 1),
-            loc="upper left",
-            fontsize=9,
-            framealpha=0.9,
-        )
-        plt.grid(True, alpha=0.3)
-
-        ax = plt.gca()
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-
-        if output_path:
-            plt.savefig(output_path, dpi=300, bbox_inches="tight")
-            logger.info(f"Top reactions per week graph saved to {output_path}")
-            plt.close()
-            return output_path
-        else:
-            plt.show()
-            return None
-
     def generate_top_threads_bar_chart(
         self,
         data: MessageStatisticsData,
@@ -1174,16 +942,8 @@ class MessageGraphGenerator:
         ax.set_title(f"Top {top_n} Threads by Message Count", fontsize=16, fontweight="bold")
         ax.set_xlabel("Number of Messages", fontsize=12)
         ax.grid(True, axis="x", alpha=0.3)
-        plt.tight_layout()
 
-        if output_path:
-            plt.savefig(output_path, dpi=300, bbox_inches="tight")
-            logger.info(f"Top threads bar chart saved to {output_path}")
-            plt.close()
-            return output_path
-        else:
-            plt.show()
-            return None
+        return self._save_or_show(output_path, "Top threads bar chart")
 
     def generate_author_share_over_time_graph(
         self,
@@ -1263,16 +1023,8 @@ class MessageGraphGenerator:
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
         plt.xticks(rotation=45)
-        plt.tight_layout()
 
-        if output_path:
-            plt.savefig(output_path, dpi=300, bbox_inches="tight")
-            logger.info(f"Author share graph saved to {output_path}")
-            plt.close()
-            return output_path
-        else:
-            plt.show()
-            return None
+        return self._save_or_show(output_path, "Author share graph")
 
     def generate_channel_weekday_heatmap(
         self,
@@ -1334,13 +1086,5 @@ class MessageGraphGenerator:
         plt.title("Channel Activity by Day of Week", fontsize=16, fontweight="bold")
         plt.xlabel("Day of Week", fontsize=12)
         plt.ylabel("Channel", fontsize=12)
-        plt.tight_layout()
 
-        if output_path:
-            plt.savefig(output_path, dpi=300, bbox_inches="tight")
-            logger.info(f"Channel weekday heatmap saved to {output_path}")
-            plt.close()
-            return output_path
-        else:
-            plt.show()
-            return None
+        return self._save_or_show(output_path, "Channel weekday heatmap")
