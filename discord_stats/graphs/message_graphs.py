@@ -207,6 +207,29 @@ class MessageGraphGenerator:
             if file_path:
                 generated_files.append(file_path)
 
+            # Generate top threads bar chart
+            file_path = self.generate_top_threads_bar_chart(
+                data, str(output_path / f"{prefix}_top_threads.png")
+            )
+            if file_path:
+                generated_files.append(file_path)
+
+            # Generate author share stacked area (weekly)
+            file_path = self.generate_author_share_over_time_graph(
+                data,
+                str(output_path / f"{prefix}_author_share_over_time.png"),
+                smooth=smooth,
+            )
+            if file_path:
+                generated_files.append(file_path)
+
+            # Generate channel x day-of-week heatmap
+            file_path = self.generate_channel_weekday_heatmap(
+                data, str(output_path / f"{prefix}_channel_weekday_heatmap.png")
+            )
+            if file_path:
+                generated_files.append(file_path)
+
         except Exception as e:
             logger.error(f"Error generating graphs: {e}")
 
@@ -1142,3 +1165,222 @@ class MessageGraphGenerator:
             plt.show()
             return None
 
+    def generate_top_threads_bar_chart(
+        self,
+        data: MessageStatisticsData,
+        output_path: Optional[str] = None,
+        top_n: int = 10,
+    ) -> Optional[str]:
+        """
+        Generate a horizontal bar chart showing top threads by message count.
+
+        Args:
+            data: Message statistics data
+            output_path: Path to save the graph (optional)
+            top_n: Number of top threads to display
+
+        Returns:
+            Path to saved file or None if not saved
+        """
+        if not data.messages_per_thread:
+            logger.warning("Insufficient data for top threads bar chart")
+            return None
+
+        top_threads = data.messages_per_thread.most_common(top_n)
+        if not top_threads:
+            return None
+
+        thread_names = [t[0].replace("#", "") for t in top_threads]
+        counts = [t[1] for t in top_threads]
+
+        # Reverse so highest bar appears at the top
+        thread_names = thread_names[::-1]
+        counts = counts[::-1]
+
+        fig, ax = plt.subplots(figsize=(10, max(4, len(thread_names) * 0.6)))
+        colors = sns.color_palette("husl", len(thread_names))
+        bars = ax.barh(thread_names, counts, color=colors)
+
+        max_count = max(counts) if counts else 1
+        for bar, count in zip(bars, counts):
+            ax.text(
+                bar.get_width() + max_count * 0.01,
+                bar.get_y() + bar.get_height() / 2,
+                str(count),
+                va="center",
+                fontsize=9,
+            )
+
+        ax.set_title(f"Top {top_n} Threads by Message Count", fontsize=16, fontweight="bold")
+        ax.set_xlabel("Number of Messages", fontsize=12)
+        ax.grid(True, axis="x", alpha=0.3)
+        plt.tight_layout()
+
+        if output_path:
+            plt.savefig(output_path, dpi=300, bbox_inches="tight")
+            logger.info(f"Top threads bar chart saved to {output_path}")
+            plt.close()
+            return output_path
+        else:
+            plt.show()
+            return None
+
+    def generate_author_share_over_time_graph(
+        self,
+        data: MessageStatisticsData,
+        output_path: Optional[str] = None,
+        top_n: int = 10,
+        smooth: bool = True,
+    ) -> Optional[str]:
+        """
+        Generate a 100%-normalised stacked area chart showing each top author's
+        weekly share of total server messages.
+
+        Args:
+            data: Message statistics data
+            output_path: Path to save the graph (optional)
+            top_n: Number of top authors to include
+            smooth: Whether to apply Gaussian smoothing to the area bands (default: True)
+
+        Returns:
+            Path to saved file or None if not saved
+        """
+        top_authors_data = data.get_top_authors_with_daily_data(top_n)
+        if not top_authors_data or not data.messages_per_day:
+            logger.warning("Insufficient data for author share graph")
+            return None
+
+        all_weekly = data.get_weekly_data(data.messages_per_day)
+        all_weeks = sorted(all_weekly.keys())
+        if len(all_weeks) < 2:
+            logger.warning("Too few weeks for author share graph")
+            return None
+
+        dates = [dt.fromisoformat(w) for w in all_weeks]
+        week_totals = [all_weekly.get(w, 0) for w in all_weeks]
+
+        # Compute per-author weekly share (%)
+        author_shares: list[list[float]] = []
+        labels: list[str] = []
+        for author_name, _, daily_data in top_authors_data:
+            weekly = data.get_weekly_data(daily_data)
+            shares = [
+                (weekly.get(w, 0) / total * 100) if total > 0 else 0.0
+                for w, total in zip(all_weeks, week_totals)
+            ]
+            author_shares.append(shares)
+            labels.append(data.messages_per_author_username.get(author_name, author_name))
+
+        # "Others" band = remainder not covered by top authors
+        others: list[float] = [
+            max(0.0, 100.0 - sum(s[i] for s in author_shares))
+            for i in range(len(all_weeks))
+        ]
+
+        # Apply Gaussian smoothing if requested (clamp to >= 0)
+        if smooth and len(dates) >= 3:
+            author_shares = [
+                np.clip(gaussian_filter1d(s, sigma=1.0), 0, None).tolist()
+                for s in author_shares
+            ]
+            others = np.clip(gaussian_filter1d(others, sigma=1.0), 0, None).tolist()
+
+        fig, ax = plt.subplots(figsize=(14, 8))
+        colors = sns.color_palette("tab10", len(labels))
+        ax.stackplot(dates, *author_shares, labels=labels, colors=colors, alpha=0.85)
+        ax.stackplot(dates, others, labels=["Others"], colors=["#cccccc"], alpha=0.5)
+
+        ax.set_title(
+            f"Top {top_n} Authors - Weekly Message Share",
+            fontsize=16,
+            fontweight="bold",
+        )
+        ax.set_xlabel("Week", fontsize=12)
+        ax.set_ylabel("Share of Weekly Messages (%)", fontsize=12)
+        ax.set_ylim(0, 100)
+        ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), framealpha=0.9, fontsize=9)
+        ax.grid(True, alpha=0.3)
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+
+        if output_path:
+            plt.savefig(output_path, dpi=300, bbox_inches="tight")
+            logger.info(f"Author share graph saved to {output_path}")
+            plt.close()
+            return output_path
+        else:
+            plt.show()
+            return None
+
+    def generate_channel_weekday_heatmap(
+        self,
+        data: MessageStatisticsData,
+        output_path: Optional[str] = None,
+        top_n: int = 10,
+    ) -> Optional[str]:
+        """
+        Generate a heatmap showing average message activity per channel by day of week.
+
+        Args:
+            data: Message statistics data
+            output_path: Path to save the graph (optional)
+            top_n: Number of top channels to include
+
+        Returns:
+            Path to saved file or None if not saved
+        """
+        if not data.messages_per_day_per_channel:
+            logger.warning("Insufficient data for channel weekday heatmap")
+            return None
+
+        top_channels = [ch for ch, _, _ in data.get_top_channels(top_n)]
+        if not top_channels:
+            return None
+
+        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+        # Count how many times each weekday appears in the period (for averaging)
+        all_dates = data.get_all_dates_in_range()
+        weekday_occurrences = [0] * 7
+        for date_str in all_dates:
+            weekday_occurrences[dt.fromisoformat(date_str).weekday()] += 1
+
+        # Build pivot: channel -> avg messages per weekday
+        pivot: dict[str, list[float]] = {}
+        for channel in top_channels:
+            daily = data.messages_per_day_per_channel.get(channel, {})
+            weekday_totals = [0] * 7
+            for date_str, count in daily.items():
+                weekday_totals[dt.fromisoformat(date_str).weekday()] += count
+            avg = [
+                weekday_totals[wd] / weekday_occurrences[wd] if weekday_occurrences[wd] > 0 else 0.0
+                for wd in range(7)
+            ]
+            pivot[channel.replace("#", "")] = avg
+
+        df = pd.DataFrame(pivot, index=day_names).T  # channels as rows, weekdays as columns
+
+        plt.figure(figsize=(10, max(4, len(top_channels) * 0.6)))
+        sns.heatmap(
+            df,
+            annot=True,
+            fmt=".1f",
+            cmap="YlOrRd",
+            cbar_kws={"label": "Avg messages / day"},
+            linewidths=0.5,
+        )
+        plt.title("Channel Activity by Day of Week", fontsize=16, fontweight="bold")
+        plt.xlabel("Day of Week", fontsize=12)
+        plt.ylabel("Channel", fontsize=12)
+        plt.tight_layout()
+
+        if output_path:
+            plt.savefig(output_path, dpi=300, bbox_inches="tight")
+            logger.info(f"Channel weekday heatmap saved to {output_path}")
+            plt.close()
+            return output_path
+        else:
+            plt.show()
+            return None
