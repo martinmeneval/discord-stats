@@ -212,7 +212,7 @@ class MessageGraphGenerator:
             label = f"{display} ({total_count} total)"
 
             if smooth and len(dates) > 2:
-                sigma = 1.0 if weekly else 1.5
+                sigma = max(1.5, len(dates) * 0.05)
                 x_s, y_s = self._smooth_data(dates, counts, smoothing_factor=sigma)
                 plt.plot(x_s, y_s, linewidth=3, alpha=0.8, label=label, color=color)
             else:
@@ -235,8 +235,7 @@ class MessageGraphGenerator:
         plt.grid(True, alpha=0.3)
 
         ax = plt.gca()
-        if cumulative:
-            ax.set_yscale("function", functions=(np.sqrt, np.square))
+        ax.set_yscale("function", functions=(np.sqrt, np.square))
         self._format_date_axis(ax, len(all_dates), use_auto=weekly)
 
         return self._save_or_show(output_path, log_msg)
@@ -453,18 +452,18 @@ class MessageGraphGenerator:
                 data, str(output_path / f"{prefix}_cumulative_top_reactions.png"), smooth=False,
             )
 
-        # Weekly line graphs (always generated)
+        # Smoothed daily line graphs (always generated)
         _try_generate(
             self.generate_top_authors_per_week_graph,
-            data, str(output_path / f"{prefix}_weekly_top_authors.png"), smooth=smooth,
+            data, str(output_path / f"{prefix}_daily_top_authors.png"), smooth=smooth,
         )
         _try_generate(
             self.generate_top_channels_per_week_graph,
-            data, str(output_path / f"{prefix}_weekly_top_channels.png"), smooth=smooth,
+            data, str(output_path / f"{prefix}_daily_top_channels.png"), smooth=smooth,
         )
         _try_generate(
             self.generate_top_reactions_per_week_graph,
-            data, str(output_path / f"{prefix}_weekly_top_reactions.png"), smooth=smooth,
+            data, str(output_path / f"{prefix}_daily_top_reactions.png"), smooth=smooth,
         )
 
         _try_generate(
@@ -651,16 +650,16 @@ class MessageGraphGenerator:
         top_n: int = 10,
         smooth: bool = True,
     ) -> Optional[str]:
-        """Generate a weekly line graph for the top authors."""
+        """Generate a smoothed daily line graph for the top authors."""
         return self._generate_multi_series_line_graph(
             data.get_top_authors_with_daily_data(top_n),
             data,
-            title=f"Top {top_n} Authors - Messages Per Week",
-            ylabel="Messages Per Week",
-            log_msg="Top authors per week graph",
+            title=f"Top {top_n} Authors - Messages Per Day (smoothed)",
+            ylabel="Messages Per Day",
+            log_msg="Top authors per day graph",
             output_path=output_path,
             smooth=smooth,
-            weekly=True,
+            weekly=False,
             display_name_fn=lambda n: data.messages_per_author_username.get(n, n),
         )
 
@@ -671,16 +670,16 @@ class MessageGraphGenerator:
         top_n: int = 10,
         smooth: bool = True,
     ) -> Optional[str]:
-        """Generate a weekly line graph for the top channels."""
+        """Generate a smoothed daily line graph for the top channels."""
         return self._generate_multi_series_line_graph(
             data.get_top_channels_with_daily_data(top_n),
             data,
-            title=f"Top {top_n} Channels - Messages Per Week",
-            ylabel="Messages Per Week",
-            log_msg="Top channels per week graph",
+            title=f"Top {top_n} Channels - Messages Per Day (smoothed)",
+            ylabel="Messages Per Day",
+            log_msg="Top channels per day graph",
             output_path=output_path,
             smooth=smooth,
-            weekly=True,
+            weekly=False,
             figsize=(12, 8),
             display_name_fn=lambda n: n.replace("#", ""),
             legend_kwargs={"bbox_to_anchor": (1.05, 1), "loc": "upper left"},
@@ -693,16 +692,16 @@ class MessageGraphGenerator:
         top_n: int = 10,
         smooth: bool = True,
     ) -> Optional[str]:
-        """Generate a weekly line graph for the top reactions."""
+        """Generate a smoothed daily line graph for the top reactions."""
         return self._generate_multi_series_line_graph(
             data.get_top_reactions_with_daily_data(top_n),
             data,
-            title=f"Top {top_n} Reactions - Usage Per Week",
-            ylabel="Reactions Per Week",
-            log_msg="Top reactions per week graph",
+            title=f"Top {top_n} Reactions - Usage Per Day (smoothed)",
+            ylabel="Reactions Per Day",
+            log_msg="Top reactions per day graph",
             output_path=output_path,
             smooth=smooth,
-            weekly=True,
+            weekly=False,
             display_name_fn=self._emoji_display_name,
             legend_kwargs={"bbox_to_anchor": (1.02, 1), "loc": "upper left", "fontsize": 9},
         )
