@@ -14,7 +14,6 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib.axes import Axes
-from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d
 
 from ..collectors.message_stats import MessageStatisticsData
@@ -102,40 +101,10 @@ class MessageGraphGenerator:
             return x_data, y_data
 
         try:
-            # Convert dates to numeric values for interpolation
-            x_numeric = [
-                x.timestamp() if hasattr(x, "timestamp") else float(x) for x in x_data
-            ]
-
             # Apply gaussian smoothing to y data
             y_smoothed = gaussian_filter1d(y_data, sigma=smoothing_factor)
 
-            # Create more points for smoother curves if we have enough data
-            if len(x_data) >= 5:
-                # Create interpolation function
-                f = interp1d(
-                    x_numeric,
-                    y_smoothed,
-                    kind="cubic",
-                    bounds_error=False,
-                    fill_value=0,
-                )
-
-                # Generate more x points for smoother curve
-                x_new_numeric = np.linspace(
-                    min(x_numeric), max(x_numeric), len(x_data) * 3
-                )
-                y_new = f(x_new_numeric)
-
-                # Convert back to datetime if needed
-                if hasattr(x_data[0], "timestamp"):
-                    x_new = [dt.fromtimestamp(ts) for ts in x_new_numeric]
-                else:
-                    x_new = x_new_numeric.tolist()
-
-                return x_new, y_new.tolist()
-            else:
-                return x_data, y_smoothed.tolist()
+            return x_data, y_smoothed.tolist()
 
         except Exception as e:
             logger.debug(f"Error smoothing data: {e}, returning original data")
