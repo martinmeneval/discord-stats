@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib.axes import Axes
-from scipy.interpolate import PchipInterpolator
+from scipy.interpolate import make_interp_spline
 from scipy.ndimage import gaussian_filter1d
 
 from ..collectors.message_stats import MessageStatisticsData
@@ -105,16 +105,16 @@ class MessageGraphGenerator:
             # Apply gaussian smoothing to y data
             y_smoothed = gaussian_filter1d(y_data, sigma=smoothing_factor)
 
-            # Upsample via monotone cubic (PchipInterpolator) for visual
-            # smoothness — unlike regular cubic splines it never overshoots.
+            # Upsample via cubic B-spline for visually smooth curves.
+            # Data is already Gaussian-smoothed so overshoot is minimal.
             if len(x_data) >= 4:
                 x_numeric = np.array([
                     x.timestamp() if hasattr(x, "timestamp") else float(x)
                     for x in x_data
                 ])
-                pchip = PchipInterpolator(x_numeric, y_smoothed)
+                spline = make_interp_spline(x_numeric, y_smoothed, k=3)
                 x_fine = np.linspace(x_numeric[0], x_numeric[-1], len(x_data) * 4)
-                y_fine = np.maximum(pchip(x_fine), 0).tolist()
+                y_fine = np.maximum(spline(x_fine), 0).tolist()
                 if hasattr(x_data[0], "timestamp"):
                     x_out = [dt.fromtimestamp(ts) for ts in x_fine]
                 else:
