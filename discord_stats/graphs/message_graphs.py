@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib.axes import Axes
+from scipy.interpolate import PchipInterpolator
 from scipy.ndimage import gaussian_filter1d
 
 from ..collectors.message_stats import MessageStatisticsData
@@ -104,7 +105,23 @@ class MessageGraphGenerator:
             # Apply gaussian smoothing to y data
             y_smoothed = gaussian_filter1d(y_data, sigma=smoothing_factor)
 
-            return x_data, y_smoothed.tolist()
+            # Upsample via monotone cubic (PchipInterpolator) for visual
+            # smoothness — unlike regular cubic splines it never overshoots.
+            if len(x_data) >= 4:
+                x_numeric = np.array([
+                    x.timestamp() if hasattr(x, "timestamp") else float(x)
+                    for x in x_data
+                ])
+                pchip = PchipInterpolator(x_numeric, y_smoothed)
+                x_fine = np.linspace(x_numeric[0], x_numeric[-1], len(x_data) * 4)
+                y_fine = np.maximum(pchip(x_fine), 0).tolist()
+                if hasattr(x_data[0], "timestamp"):
+                    x_out = [dt.fromtimestamp(ts) for ts in x_fine]
+                else:
+                    x_out = x_fine.tolist()
+                return x_out, y_fine
+
+            return x_data, np.maximum(y_smoothed, 0).tolist()
 
         except Exception as e:
             logger.debug(f"Error smoothing data: {e}, returning original data")
@@ -181,7 +198,7 @@ class MessageGraphGenerator:
             label = f"{display} ({total_count} total)"
 
             if smooth and len(dates) > 2:
-                sigma = max(1.5, len(dates) * 0.05)
+                sigma = max(3.0, len(dates) * 0.07)
                 x_s, y_s = self._smooth_data(dates, counts, smoothing_factor=sigma)
                 plt.plot(x_s, y_s, linewidth=3, alpha=0.8, label=label, color=color)
             else:
