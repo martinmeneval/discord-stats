@@ -1015,7 +1015,11 @@ class MessageGraphGenerator:
                 for w, total in zip(all_weeks, week_totals)
             ]
             author_shares.append(shares)
-            labels.append(data.messages_per_author_username.get(author_name, author_name))
+            display = data.messages_per_author_username.get(author_name, author_name)
+            # Matplotlib silently hides labels starting with '_'
+            if display.startswith("_"):
+                display = "\u200B" + display
+            labels.append(display)
 
         # "Others" band = remainder not covered by top authors
         others: list[float] = [
@@ -1031,10 +1035,13 @@ class MessageGraphGenerator:
             ]
             others = np.clip(gaussian_filter1d(others, sigma=1.0), 0, None).tolist()
 
+        # Single stackplot so all bands stack correctly (no y=0 overlap)
+        all_shares = author_shares + [others]
+        all_labels = labels + ["Others"]
+        all_colors = list(sns.color_palette("tab10", len(labels))) + ["#cccccc"]
+
         fig, ax = plt.subplots(figsize=(14, 8))
-        colors = sns.color_palette("tab10", len(labels))
-        ax.stackplot(dates, *author_shares, labels=labels, colors=colors, alpha=0.85)
-        ax.stackplot(dates, others, labels=["Others"], colors=["#cccccc"], alpha=0.5)
+        ax.stackplot(dates, *all_shares, labels=all_labels, colors=all_colors, alpha=0.85)
 
         ax.set_title(
             f"Top {top_n} Authors - Weekly Message Share",
