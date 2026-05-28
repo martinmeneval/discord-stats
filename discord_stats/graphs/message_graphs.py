@@ -98,15 +98,17 @@ class MessageGraphGenerator:
         Returns:
             Tuple of (smoothed_x, smoothed_y) data
         """
-        if len(x_data) < 3 or smoothing_factor <= 0:
+        if len(x_data) < 3:
             return x_data, y_data
 
         try:
-            # Apply gaussian smoothing to y data
-            y_smoothed = gaussian_filter1d(y_data, sigma=smoothing_factor)
+            # Optionally apply Gaussian smoothing
+            if smoothing_factor > 0:
+                y_smoothed = gaussian_filter1d(y_data, sigma=smoothing_factor)
+            else:
+                y_smoothed = np.asarray(y_data, dtype=float)
 
             # Upsample via cubic B-spline for visually smooth curves.
-            # Data is already Gaussian-smoothed so overshoot is minimal.
             if len(x_data) >= 4:
                 x_numeric = np.array([
                     x.timestamp() if hasattr(x, "timestamp") else float(x)
@@ -210,7 +212,7 @@ class MessageGraphGenerator:
             label = f"{display} ({total_count} total)"
 
             if smooth and len(dates) > 2:
-                sigma = max(1.5, len(dates) * 0.1)
+                sigma = max(1.5, len(dates) * 0.1) if cumulative else 0
                 x_s, y_s = self._smooth_data(dates, counts, smoothing_factor=sigma)
                 plt.plot(x_s, y_s, linewidth=3, alpha=0.8, label=label, color=color)
             else:
