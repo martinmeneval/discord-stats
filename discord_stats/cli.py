@@ -10,6 +10,7 @@ from pathlib import Path
 import click
 from dateutil import parser as date_parser
 
+from .cache import MessageCache
 from .config import load_config
 from .discord_client import fetch_statistics
 from .formatters.message_stats import format_statistics_text
@@ -107,8 +108,19 @@ def cli():
 )
 @click.option(
     "--history-offset/--no-history-offset",
+    default=False,
+    help="Generate cumulative graphs seeded from pre-period message counts (adds an extra fetch pass)",
+)
+@click.option(
+    "--cache/--no-cache",
     default=True,
-    help="Seed cumulative graphs from pre-period message counts (default: on; adds an extra fetch pass)",
+    help="Enable SQLite message cache for faster repeat runs (default: on)",
+)
+@click.option(
+    "--cache-path",
+    type=click.Path(),
+    default="discord_stats_cache.db",
+    help="Path to the SQLite cache file",
 )
 @click.option("--debug/--no-debug", default=False, help="Enable debug logging")
 def stats(
@@ -122,6 +134,8 @@ def stats(
     graphs_dir,
     smooth,
     history_offset,
+    cache,
+    cache_path,
     debug,
 ):
     """Fetch statistics from a Discord server and output them as plain text."""
@@ -143,8 +157,14 @@ def stats(
         f"Fetching statistics for guild {guild_id} from {start.date()} to {end.date()}"
     )
 
+    msg_cache: MessageCache | None = None
     try:
-        stats_data = asyncio.run(fetch_statistics(token, guild_id, start, end, history_offset=history_offset))
+        if cache:
+            msg_cache = MessageCache(cache_path)
+
+        stats_data = asyncio.run(
+            fetch_statistics(token, guild_id, start, end, history_offset=history_offset, cache=msg_cache)
+        )
 
         if not stats_data:
             logging.error("Failed to fetch statistics data")
@@ -174,7 +194,7 @@ def stats(
             # Generate graphs
             graph_generator = MessageGraphGenerator()
             generated_files = graph_generator.generate_all_graphs(
-                stats_data, graph_output_dir, "discord_stats", smooth=smooth
+                stats_data, graph_output_dir, "discord_stats", smooth=smooth, history_offset=history_offset
             )
 
             if generated_files:
@@ -187,6 +207,9 @@ def stats(
     except Exception:
         logging.exception("Error fetching statistics")
         sys.exit(1)
+    finally:
+        if msg_cache:
+            msg_cache.close()
 
 
 @cli.command()
@@ -206,9 +229,25 @@ def stats(
     default=True,
     help="Apply smoothing to line graphs (default: on)",
 )
+@click.option(
+    "--history-offset/--no-history-offset",
+    default=False,
+    help="Generate cumulative graphs seeded from pre-period message counts (adds an extra fetch pass)",
+)
+@click.option(
+    "--cache/--no-cache",
+    default=True,
+    help="Enable SQLite message cache for faster repeat runs (default: on)",
+)
+@click.option(
+    "--cache-path",
+    type=click.Path(),
+    default="discord_stats_cache.db",
+    help="Path to the SQLite cache file",
+)
 @click.option("--debug/--no-debug", default=False, help="Enable debug logging")
 def graphs(
-    config, token, guild_id, start_date, end_date, output_dir, prefix, smooth, debug
+    config, token, guild_id, start_date, end_date, output_dir, prefix, smooth, history_offset, cache, cache_path, debug
 ):
     """Generate graphs from Discord server statistics."""
     log_level = logging.DEBUG if debug else logging.INFO
@@ -229,8 +268,14 @@ def graphs(
         f"Fetching statistics for guild {guild_id} from {start.date()} to {end.date()}"
     )
 
+    msg_cache: MessageCache | None = None
     try:
-        stats_data = asyncio.run(fetch_statistics(token, guild_id, start, end))
+        if cache:
+            msg_cache = MessageCache(cache_path)
+
+        stats_data = asyncio.run(
+            fetch_statistics(token, guild_id, start, end, history_offset=history_offset, cache=msg_cache)
+        )
 
         if not stats_data:
             logging.error("Failed to fetch statistics data")
@@ -239,7 +284,7 @@ def graphs(
         # Generate graphs
         graph_generator = MessageGraphGenerator()
         generated_files = graph_generator.generate_all_graphs(
-            stats_data, output_dir, prefix, smooth=smooth
+            stats_data, output_dir, prefix, smooth=smooth, history_offset=history_offset
         )
 
         if generated_files:
@@ -252,6 +297,9 @@ def graphs(
     except Exception:
         logging.exception("Error generating graphs")
         sys.exit(1)
+    finally:
+        if msg_cache:
+            msg_cache.close()
 
 
 @cli.command()

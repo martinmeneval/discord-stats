@@ -1,12 +1,18 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 from collections import Counter
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 import discord
 from discord.channel import TextChannel
 from discord.guild import Guild
 from discord.threads import Thread
+
+if TYPE_CHECKING:
+    from ..cache import CachedMessage, MessageCache
 
 
 class MessageStatisticsData:
@@ -165,6 +171,25 @@ class MessageStatisticsData:
 
         return dates
 
+    @staticmethod
+    def get_weekly_data(daily_data: dict[str, int]) -> dict[str, int]:
+        """
+        Aggregate daily message counts into weekly buckets (Monday-aligned).
+
+        Args:
+            daily_data: Mapping of ISO date strings to counts
+
+        Returns:
+            Mapping of ISO week-start date strings (Monday) to aggregated counts
+        """
+        weekly: dict[str, int] = {}
+        for date_str, count in daily_data.items():
+            d = datetime.fromisoformat(date_str).date()
+            week_start = d - timedelta(days=d.weekday())
+            week_key = week_start.isoformat()
+            weekly[week_key] = weekly.get(week_key, 0) + count
+        return weekly
+
     def get_top_channels_with_daily_data(
         self, limit: int = 5
     ) -> list[tuple[str, int, dict[str, int]]]:
@@ -279,7 +304,8 @@ class MessageStatisticsCollector:
         start_date: datetime,
         end_date: datetime,
         concurrency: int = 10,
-        history_offset: bool = True,
+        history_offset: bool = False,
+        cache: MessageCache | None = None,
     ) -> MessageStatisticsData:
         """
         Collect message statistics from the guild between the given dates.
@@ -318,7 +344,7 @@ class MessageStatisticsCollector:
             async with semaphore:
                 before = stats.total_messages
                 await self._process_channel_with_threads(
-                    channel, stats, start_date, end_date
+                    channel, stats, start_date, end_date, cache=cache,
                 )
                 fetched = stats.total_messages - before
                 remaining -= 1
@@ -335,10 +361,15 @@ class MessageStatisticsCollector:
 
             async def _pre_bounded(channel: TextChannel) -> None:
                 async with pre_semaphore:
-                    await self._collect_pre_period_counts(channel, stats, start_date)
+                    await self._collect_pre_period_counts(
+                        channel, stats, start_date, cache=cache,
+                    )
 
             _ = await asyncio.gather(*(_pre_bounded(ch) for ch in channels))  # type: ignore[arg-type]
             logging.info("Pre-period count collection complete.")
+
+        if cache:
+            cache.flush()
 
         logging.info(
             f"Statistics collection complete. Found {stats.total_messages:,} messages across {len(stats.messages_per_channel)} channels"
@@ -350,48 +381,73 @@ class MessageStatisticsCollector:
         channel: TextChannel,
         stats: MessageStatisticsData,
         start_date: datetime,
+        *,
+        cache: MessageCache | None = None,
     ) -> None:
         """
         Count messages posted before start_date in the channel (and its threads).
         Only counts; does not process content.
+
+        When *cache* is provided and already contains messages before *start_date*
+        for this channel, counts are read directly from the cache (instant).
+        Otherwise messages are fetched from Discord and cached for future runs.
         """
         channel_key = f"#{channel.name}"
         channel_count = 0
         author_counts: Counter[str] = Counter()
         reaction_counts: Counter[str] = Counter()
 
-        def _tally(message: discord.Message) -> None:
-            if getattr(message.author, "bot", False):
-                return
-            nonlocal channel_count
-            channel_count += 1
-            author_counts[message.author.display_name] += 1
-            for reaction in message.reactions:
-                emoji_key = str(reaction.emoji)
-                reaction_counts[emoji_key] += reaction.count
+        # ── Fast path: use cached counts if available ──
+        if cache and cache.has_messages_before(channel.guild.id, channel.id, start_date):
+            ch_ct, auth_ct, rxn_ct = cache.get_pre_period_counts(
+                channel.guild.id, channel.id, start_date,
+            )
+            channel_count = ch_ct
+            author_counts = auth_ct
+            reaction_counts = rxn_ct
+        else:
+            # ── Slow path: fetch from Discord and optionally cache ──
+            def _tally(message: discord.Message) -> None:
+                if getattr(message.author, "bot", False):
+                    return
+                nonlocal channel_count
+                channel_count += 1
+                author_counts[message.author.display_name] += 1
+                for reaction in message.reactions:
+                    emoji_key = str(reaction.emoji)
+                    reaction_counts[emoji_key] += reaction.count
 
-        try:
-            async for message in channel.history(
-                before=start_date, limit=None, oldest_first=False
-            ):
-                _tally(message)
-        except discord.Forbidden:
-            pass
-        except Exception as exc:
-            logging.warning(f"Pre-period count failed for #{channel.name}: {exc}")
+            try:
+                async for message in channel.history(
+                    before=start_date, limit=None, oldest_first=False
+                ):
+                    _tally(message)
+                    if cache:
+                        self._cache_discord_message(cache, message, channel_key, is_thread=False)
+            except discord.Forbidden:
+                pass
+            except Exception as exc:
+                logging.warning(f"Pre-period count failed for #{channel.name}: {exc}")
 
-        # Also count archived threads
-        try:
-            async for thread in channel.archived_threads(limit=None):
-                try:
-                    async for message in thread.history(
-                        before=start_date, limit=None, oldest_first=False
-                    ):
-                        _tally(message)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+            # Also count archived threads
+            try:
+                async for thread in channel.archived_threads(limit=None):
+                    try:
+                        async for message in thread.history(
+                            before=start_date, limit=None, oldest_first=False
+                        ):
+                            _tally(message)
+                            if cache:
+                                self._cache_discord_message(
+                                    cache, message, f"#{thread.name}", is_thread=True,
+                                )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            if cache:
+                cache.flush()
 
         if channel_count > 0:
             stats.pre_period_messages_per_channel[channel_key] = (
@@ -414,6 +470,8 @@ class MessageStatisticsCollector:
         stats: MessageStatisticsData,
         start_date: datetime,
         end_date: datetime,
+        *,
+        cache: MessageCache | None = None,
     ) -> None:
         """Process a channel and its threads."""
         # Check if we have permission to read message history
@@ -426,7 +484,7 @@ class MessageStatisticsCollector:
 
         # Process the main channel
         logging.info(f"Processing channel: #{channel.name}")
-        await self._process_channel(channel, stats, start_date, end_date)
+        await self._process_channel(channel, stats, start_date, end_date, cache=cache)
 
         # Process threads if available
         try:
@@ -436,7 +494,9 @@ class MessageStatisticsCollector:
                 for thread in threads:
                     if thread.permissions_for(thread.guild.me).read_message_history:
                         logging.info(f"Processing thread: #{thread.name}")
-                        await self._process_channel(thread, stats, start_date, end_date)
+                        await self._process_channel(
+                            thread, stats, start_date, end_date, cache=cache,
+                        )
         except (AttributeError, discord.errors.Forbidden) as e:
             logging.debug(f"Could not access threads in #{channel.name}: {e}")
 
@@ -446,19 +506,50 @@ class MessageStatisticsCollector:
         stats: MessageStatisticsData,
         start_date: datetime,
         end_date: datetime,
+        *,
+        cache: MessageCache | None = None,
     ) -> None:
-        """Process messages in a channel or thread."""
-        channel_name = f"#{channel.name}"
+        """Process messages in a channel or thread.
 
-        # Check if this is a thread
+        When *cache* is provided:
+        1. Replay already-cached rows in [start_date, end_date) into stats.
+        2. Only fetch from Discord messages newer than the newest cached one.
+        3. Cache every newly fetched message for future runs.
+        """
+        channel_name = f"#{channel.name}"
         is_thread = isinstance(channel, Thread)
 
+        fetch_after = start_date  # default: fetch everything in range
+
+        if cache:
+            # Replay cached messages into stats
+            cached_count = 0
+            for row in cache.iter_messages(
+                channel.guild.id, channel.id, start_date, end_date,
+            ):
+                self._process_cached_row(row, stats, channel_name, is_thread)
+                cached_count += 1
+
+            if cached_count:
+                logging.debug(
+                    f"Replayed {cached_count} cached messages for {channel_name}"
+                )
+
+            # Only fetch from Discord what is newer than the cache
+            newest = cache.get_newest_timestamp(channel.guild.id, channel.id)
+            if newest is not None:
+                if newest >= end_date:
+                    return  # channel fully cached for this range
+                if newest > start_date:
+                    fetch_after = newest
+
         try:
-            # Fetch messages within date range
             async for message in channel.history(
-                limit=None, after=start_date, before=end_date
+                limit=None, after=fetch_after, before=end_date,
             ):
                 self._process_message(message, stats, channel_name, is_thread)
+                if cache:
+                    self._cache_discord_message(cache, message, channel_name, is_thread)
 
         except Exception as e:
             logging.error(f"Error fetching messages from {channel_name}: {str(e)}")
@@ -472,7 +563,7 @@ class MessageStatisticsCollector:
     ) -> None:
         """Process a single message and update statistics."""
         # Skip bot messages
-        if not hasattr(message.author, "bot") or message.author.bot:
+        if getattr(message.author, "bot", False):
             return
 
         # Get author name (with fallback)
@@ -575,3 +666,107 @@ class MessageStatisticsCollector:
         except Exception as e:
             # Log but continue with other messages
             logging.debug(f"Error processing reactions: {e}")
+
+    # ------------------------------------------------------------------
+    # Cache helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _cache_discord_message(
+        cache: MessageCache,
+        message: discord.Message,
+        channel_name: str,
+        is_thread: bool,
+    ) -> None:
+        """Persist a Discord message object into the SQLite cache."""
+        is_bot = bool(getattr(message.author, "bot", False))
+        author_name = getattr(
+            message.author, "display_name", f"User {message.author.id}"
+        )
+        author_username = getattr(message.author, "name", author_name)
+        image_count = sum(
+            1
+            for a in message.attachments
+            if a.content_type and a.content_type.startswith("image/")
+        )
+        reactions: list[tuple[str, int]] = []
+        for reaction in message.reactions:
+            reactions.append((str(reaction.emoji), reaction.count))
+
+        cache.cache_message(
+            message_id=message.id,
+            guild_id=message.guild.id if message.guild else 0,
+            channel_id=message.channel.id,
+            channel_name=channel_name,
+            is_thread=is_thread,
+            author_id=message.author.id,
+            author_name=author_name,
+            author_username=author_username,
+            is_bot=is_bot,
+            created_at=message.created_at.strftime("%Y-%m-%dT%H:%M:%S"),
+            image_count=image_count,
+            reactions=reactions,
+        )
+
+    def _process_cached_row(
+        self,
+        row: CachedMessage,
+        stats: MessageStatisticsData,
+        channel_name: str,
+        is_thread: bool,
+    ) -> None:
+        """Replay a single cached row into *stats* (mirrors _process_message)."""
+        if row.is_bot:
+            return
+
+        author_name = row.author_name
+        author_id = str(row.author_id)
+        author_username = row.author_username
+        message_date = row.created_at[:10]  # ISO date portion
+
+        stats.total_messages += 1
+        stats.messages_per_author[author_name] += 1
+        stats.messages_per_author_id[author_name] = author_id
+        stats.messages_per_author_username[author_name] = author_username
+        stats.messages_per_channel[channel_name] += 1
+        stats.messages_per_channel_id[channel_name] = row.channel_id
+
+        if author_name not in stats.messages_per_author_per_channel:
+            stats.messages_per_author_per_channel[author_name] = Counter()
+        stats.messages_per_author_per_channel[author_name][channel_name] += 1
+
+        stats.messages_per_day[message_date] = (
+            stats.messages_per_day.get(message_date, 0) + 1
+        )
+
+        if channel_name not in stats.messages_per_day_per_channel:
+            stats.messages_per_day_per_channel[channel_name] = {}
+        stats.messages_per_day_per_channel[channel_name][message_date] = (
+            stats.messages_per_day_per_channel[channel_name].get(message_date, 0) + 1
+        )
+
+        if author_name not in stats.messages_per_day_per_author:
+            stats.messages_per_day_per_author[author_name] = {}
+        stats.messages_per_day_per_author[author_name][message_date] = (
+            stats.messages_per_day_per_author[author_name].get(message_date, 0) + 1
+        )
+
+        if is_thread:
+            stats.messages_per_thread[channel_name] += 1
+            stats.messages_per_thread_id[channel_name] = row.channel_id
+            stats.total_thread_messages += 1
+
+        # Images
+        if row.image_count > 0:
+            stats.total_pictures += row.image_count
+            stats.pictures_per_author[author_name] += row.image_count
+
+        # Reactions
+        for emoji, count in row.reactions:
+            stats.reactions_count[emoji] += count
+            stats.total_reactions += count
+            if emoji not in stats.reactions_per_day:
+                stats.reactions_per_day[emoji] = {}
+            stats.reactions_per_day[emoji][message_date] = (
+                stats.reactions_per_day[emoji].get(message_date, 0) + count
+            )

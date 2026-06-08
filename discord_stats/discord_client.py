@@ -1,12 +1,18 @@
 """Discord client for fetching statistics."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import discord
 
 from .collectors.message_stats import MessageStatisticsCollector, MessageStatisticsData
+
+if TYPE_CHECKING:
+    from .cache import MessageCache
 
 
 async def fetch_statistics(
@@ -14,7 +20,8 @@ async def fetch_statistics(
     guild_id: int,
     start_date: datetime,
     end_date: datetime,
-    history_offset: bool = True,
+    history_offset: bool = False,
+    cache: MessageCache | None = None,
 ):
     """
     Fetch statistics data from Discord.
@@ -28,7 +35,7 @@ async def fetch_statistics(
     Returns:
         Statistics data object or None if an error occurred
     """
-    client = StatisticsClient(guild_id, start_date, end_date, history_offset=history_offset)
+    client = StatisticsClient(guild_id, start_date, end_date, history_offset=history_offset, cache=cache)
     task = None
 
     try:
@@ -67,7 +74,7 @@ async def fetch_statistics(
 class StatisticsClient(discord.Client):
     """Discord client for collecting server statistics."""
 
-    def __init__(self, guild_id: int, start_date: datetime, end_date: datetime, history_offset: bool = True):
+    def __init__(self, guild_id: int, start_date: datetime, end_date: datetime, history_offset: bool = False, cache: MessageCache | None = None):
         """
         Initialize the statistics client.
 
@@ -89,6 +96,7 @@ class StatisticsClient(discord.Client):
         self.start_date: datetime = start_date
         self.end_date: datetime = end_date
         self.history_offset: bool = history_offset
+        self.cache: MessageCache | None = cache
 
         # Initialize state
         self.guild: discord.Guild | None = None
@@ -110,6 +118,7 @@ class StatisticsClient(discord.Client):
             self.data = await collector.collect(
                 self.guild, self.start_date, self.end_date,
                 history_offset=self.history_offset,
+                cache=self.cache,
             )
 
         except Exception as e:
